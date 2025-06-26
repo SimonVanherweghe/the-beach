@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Webcam Feed</title>
+	<style>
+		body {
+			margin: 0;
+			padding: 0;
+			overflow: hidden;
+		}
+
+		.canvas-container {
+			display: flex;
+			width: 100vw;
+			height: 100vh;
+		}
+
+		.canvas-wrapper {
+			flex: 1;
+			position: relative;
+			height: 100%;
+			border: 1px solid #333;
+		}
+
+		#canvas,
+		#crop-canvas {
+			display: block;
+			width: 100%;
+			height: 100%;
+		}
+
+		#webcam-controls {
+			position: absolute;
+			top: 20px;
+			left: 20px;
+			z-index: 10;
+			background-color: rgba(0, 0, 0, 0.5);
+			color: white;
+			padding: 10px;
+			border-radius: 5px;
+			/* Add pointer-events: none to make it ignore mouse events */
+			pointer-events: none;
+		}
+
+		/* Make only the select element and buttons inside the controls respond to events */
+		#webcam-select,
+		#webcam-controls button {
+			pointer-events: auto;
+		}
+	</style>
+</head>
+
+<body>
+	<div class="canvas-container">
+		<div class="canvas-wrapper">
+			<div id="webcam-controls">
+				<label for="webcam-select">Choose webcam:</label>
+				<select id="webcam-select"></select>
+			</div>
+			<canvas id="canvas"></canvas>
+		</div>
+		<div class="canvas-wrapper">
+			<canvas id="crop-canvas"></canvas>
+		</div>
+	</div>
+	<script src="cam.js"></script>
+</body>
+
+</html>
