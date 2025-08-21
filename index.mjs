@@ -29,4 +29,8 @@ io.on("connection", (socket) => {
   socket.on("disconnect", (socket) => {
     console.log("Socket disconnected", socket.id);
   });
+
+  socket.on("detectedDots", (dots) => {
+    console.log("Detected dots:", dots);
+  });
 });

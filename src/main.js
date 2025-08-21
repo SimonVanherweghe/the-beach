@@ -469,6 +469,9 @@ function logDetectedDots() {
           size: dot.size,
         }))
       );
+      if (socket && socket.connected) {
+        socket.emit("detectedDots", detectedDots);
+      }
     } else {
       console.log("No dots detected");
     }
