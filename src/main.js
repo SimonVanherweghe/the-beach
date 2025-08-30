@@ -48,6 +48,16 @@ let lastDotLogTime = 0;
 const DOT_LOG_DEBOUNCE_MS = 2000; // Only log every 2 seconds
 const DOT_POSITION_TOLERANCE = 3; // Pixels tolerance for considering dots "same"
 
+// --- Added: require stability before emitting ---
+const DOT_STABLE_MS = 1000; // require detections to be steady for 1 second
+let stableCandidate = null;
+let stableSince = 0;
+
+// Add console view state variables
+let lastDotCount = 0;
+let consoleElems = null;
+
+// Initialize the socket connection
 const initSocket = () => {
   socket = io.connect("/");
   socket.on("connect", () => {
@@ -449,37 +459,126 @@ function dotsHaveChanged(newDots, oldDots) {
 
 // Log detected dots to console with debouncing
 function logDetectedDots() {
+  const currentTime = Date.now();
+
+  // If nothing detected and nothing previously emitted, nothing to do
   if (detectedDots.length === 0 && lastDetectedDots.length === 0) {
-    return; // No dots detected and no previous dots
+    // reset any candidate state
+    stableCandidate = null;
+    stableSince = 0;
+    // update UI
+    updateDotCount(0);
+    return;
   }
 
-  const currentTime = Date.now();
+  // If we don't have a candidate yet or the candidate differs from current detectedDots,
+  // start a new stability interval.
+  const candidateChanged =
+    !stableCandidate || dotsHaveChanged(detectedDots, stableCandidate);
+
+  if (candidateChanged) {
+    stableCandidate = JSON.parse(JSON.stringify(detectedDots));
+    stableSince = currentTime;
+    // update UI immediately with current candidate count
+    updateDotCount(stableCandidate.length);
+    return; // wait until stable for DOT_STABLE_MS
+  }
+
+  // Candidate matches current detected dots; check if it has been stable long enough
+  if (currentTime - stableSince < DOT_STABLE_MS) {
+    return; // not stable long enough yet
+  }
+
+  // Now stable for DOT_STABLE_MS. Only emit if different from last emitted and debounce passed.
+  const changedFromLastEmitted = dotsHaveChanged(
+    stableCandidate,
+    lastDetectedDots
+  );
   const timeSinceLastLog = currentTime - lastDotLogTime;
 
-  // Check if enough time has passed and dots have changed
-  const dotsChanged = dotsHaveChanged(detectedDots, lastDetectedDots);
-
-  if (timeSinceLastLog >= DOT_LOG_DEBOUNCE_MS && dotsChanged) {
-    if (detectedDots.length > 0) {
+  if (changedFromLastEmitted && timeSinceLastLog >= DOT_LOG_DEBOUNCE_MS) {
+    if (stableCandidate.length > 0) {
       console.log(
         "Detected dots:",
-        detectedDots.map((dot) => ({
+        stableCandidate.map((dot) => ({
           x: dot.x,
           y: dot.y,
-          size: dot.size,
         }))
       );
       if (socket && socket.connected) {
-        socket.emit("detectedDots", detectedDots);
+        // Emit dots with maxWidth and maxHeight
+        socket.emit("detectedDots", {
+          dots: stableCandidate.map((dot) => ({
+            x: dot.x,
+            y: dot.y,
+          })),
+          maxWidth: TRANSFORM_WIDTH,
+          maxHeight: TRANSFORM_HEIGHT,
+        });
       }
     } else {
       console.log("No dots detected");
+      if (socket && socket.connected) {
+        socket.emit("detectedDots", {
+          dots: [],
+          maxWidth: TRANSFORM_WIDTH,
+          maxHeight: TRANSFORM_HEIGHT,
+        }); // explicit empty state if needed
+      }
     }
 
-    lastDetectedDots = JSON.parse(JSON.stringify(detectedDots));
+    lastDetectedDots = JSON.parse(JSON.stringify(stableCandidate));
     lastDotLogTime = currentTime;
+    // update UI with last emitted count
+    updateDotCount(lastDetectedDots.length);
   }
 }
+
+// --- Updated: Console UI functions ---
+
+// Create and insert a floating console view into the page
+function createConsoleView() {
+  // Avoid creating twice
+  if (consoleElems) return;
+
+  const panel = document.createElement("div");
+  panel.id = "mini-console";
+  // minimal inline styling so no CSS file change needed
+  panel.style.position = "fixed";
+  panel.style.right = "12px";
+  panel.style.bottom = "12px";
+  panel.style.background = "rgba(0,0,0,0.7)";
+  panel.style.color = "white";
+  panel.style.padding = "8px 12px";
+  panel.style.borderRadius = "6px";
+  panel.style.fontFamily = "Arial, sans-serif";
+  panel.style.fontSize = "13px";
+  panel.style.zIndex = "9999";
+  panel.style.minWidth = "120px";
+  panel.style.boxShadow = "0 2px 6px rgba(0,0,0,0.5)";
+
+  // Only show dots count (removed motion & sending)
+  panel.innerHTML = `
+    <div style="font-weight:600;margin-bottom:6px;">Live Console</div>
+    <div style="display:flex;justify-content:space-between;"><span>Dots:</span><span id="console-dots">0</span></div>
+  `;
+
+  document.body.appendChild(panel);
+
+  consoleElems = {
+    panel,
+    dots: panel.querySelector("#console-dots"),
+  };
+}
+
+// Update helper functions for the console
+function updateDotCount(count) {
+  lastDotCount = count;
+  if (!consoleElems) return;
+  consoleElems.dots.textContent = String(count);
+}
+
+// --- End of console UI functions ---
 
 // Check if corners have changed
 function checkCornersChanged() {
@@ -612,6 +711,10 @@ function drawTransformedView() {
     // Still draw dots overlay if enabled (but don't recalculate dots)
     if (dotDetectionEnabled) {
       drawDotsOverlay();
+      // update UI with existing detected dots count
+      updateDotCount(detectedDots.length);
+    } else {
+      updateDotCount(0);
     }
     return;
   }
@@ -709,10 +812,14 @@ function drawTransformedView() {
   // Detect dots in the transformed image only when image actually changed
   if (dotDetectionEnabled) {
     detectedDots = detectDots(imageData);
+    // update UI with detected dots count
+    updateDotCount(detectedDots.length);
     drawDotsOverlay();
 
-    // Use debounced logging
+    // Use debounced logging (this will handle sending status updates)
     logDetectedDots();
+  } else {
+    updateDotCount(0);
   }
 }
 
@@ -933,6 +1040,10 @@ function constrainPointToVideo(point) {
 // Initialize everything
 async function init() {
   setupCanvas();
+
+  // create the console view early
+  createConsoleView();
+
   const hasWebcams = await getAvailableWebcams();
   if (hasWebcams) {
     await setupWebcam();
