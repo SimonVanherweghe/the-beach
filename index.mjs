@@ -34,14 +34,12 @@ const paperSizes = {
 const currentPaper = paperSizes.A6;
 
 const calibrationDots = [
-  { targetX: 10, targetY: 10 },
-  { targetX: currentPaper.width - 10, targetY: currentPaper.height - 10 },
-  { targetX: 10, targetY: currentPaper.height - 10 },
-  { targetX: currentPaper.width - 10, targetY: 10 },
-  { targetX: currentPaper.width / 2, targetY: currentPaper.height / 2 },
+  { targetX: currentPaper.width * 0.1, targetY: currentPaper.height * 0.1 },
+  { targetX: currentPaper.width * 0.9, targetY: currentPaper.height * 0.1 },
+  { targetX: currentPaper.width * 0.1, targetY: currentPaper.height * 0.9 },
+  { targetX: currentPaper.width * 0.9, targetY: currentPaper.height * 0.9 },
 ];
 let calibrationStep = 0;
-let previousCalibrationDots = [];
 
 let xCalibrationFactor = 1;
 let yCalibrationFactor = 1;
@@ -135,10 +133,12 @@ io.on("connection", async (socket) => {
   console.log("Socket connected", socket.id);
 
   if (currentState === STATE.CALIBRATING) {
-    await plotDot(
-      calibrationDots[calibrationStep].targetX,
-      calibrationDots[calibrationStep].targetY
-    );
+    // plot all the calibration dots, one by one
+    console.log("Starting calibration...");
+
+    for (let i = 0; i < calibrationDots.length; i++) {
+      await plotDot(calibrationDots[i].targetX, calibrationDots[i].targetY);
+    }
   }
 
   socket.on("disconnect", (socket) => {
@@ -148,33 +148,53 @@ io.on("connection", async (socket) => {
   socket.on("detectedDots", async (detection) => {
     console.log("Detected dots:", detection.dots.length);
     if (currentState === STATE.CALIBRATING) {
-      const calibrationStatus = calibrationDots[calibrationStep];
+      // do we have the sama amount of detected dots as calibration dots?
+      if (detection.dots.length >= calibrationDots.length) {
+        console.log("Calibration dots set");
 
-      const currentDot = getNewDot(calibrationDots, previousCalibrationDots);
-      currentDot.actualX = detection.dots[0].x;
-      currentDot.actualY = detection.dots[0].y;
+        // find out which calibration dot is which
+        const matchedDots = [];
+        calibrationDots.forEach((calibrationDot) => {
+          let closestDot = null;
+          let closestDistance = Infinity;
+          detection.dots.forEach((detectedDot) => {
+            const distance = Math.hypot(
+              calibrationDot.targetX - detectedDot.actualX,
+              calibrationDot.targetY - detectedDot.actualY
+            );
+            if (distance < closestDistance) {
+              closestDistance = distance;
+              closestDot = detectedDot;
+            }
+          });
 
-      console.log("Calibration status", currentDot);
+          if (closestDot) {
+            matchedDots.push({
+              ...calibrationDot,
+              actualX: closestDot.actualX,
+              actualY: closestDot.actualY,
+            });
+          }
 
-      xCalibrationFactor =
-        calibrationStatus.targetX / calibrationStatus.actualX;
-      yCalibrationFactor =
-        calibrationStatus.targetY / calibrationStatus.actualY;
+          // calculate calibration factors
+          const xFactors = matchedDots.map((dot) => dot.targetX / dot.actualX);
+          const yFactors = matchedDots.map((dot) => dot.targetY / dot.actualY);
 
-      previousCalibrationDots.push(calibrationStatus);
-      console.log("Calibration factors", {
-        xCalibrationFactor,
-        yCalibrationFactor,
-      });
+          xCalibrationFactor =
+            xFactors.reduce((sum, val) => sum + val, 0) / xFactors.length;
+          yCalibrationFactor =
+            yFactors.reduce((sum, val) => sum + val, 0) / yFactors.length;
 
-      if (calibrationStep < calibrationDots.length - 1) {
-        calibrationStep++;
-        await plotDot(
-          calibrationDots[calibrationStep].targetX,
-          calibrationDots[calibrationStep].targetY
-        );
+          console.log("xCalibrationFactor", xCalibrationFactor);
+          console.log("yCalibrationFactor", yCalibrationFactor);
+        });
+
+        setState(STATE.READY);
+      } else {
+        console.log("Not enough calibration dots detected yet");
       }
-    } else {
+    }
+    if (currentState === STATE.READY) {
       if (detection.dots.length > previousDots.length) {
         console.log("New dots detected", detection.dots);
         createNewDot(detection);
