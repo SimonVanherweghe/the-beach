@@ -5,16 +5,16 @@ def draw_dot(x, y):
     ad = axidraw.AxiDraw()
     ad.interactive()
     ad.connect()
-    ad.options.units = 2  # set working units to cm.
+    ad.options.units = 1  # set working units to mm.
     ad.update()
 
+    # Draw a 2×2 mm square as the dot
     try:
-        ad.moveto(x, y)  # Move to the specified position
-        ad.lineto(x, y)  # Raise the pen
-        ad.lineto(x+1, y)  # Raise the pen
-        ad.lineto(x+1, y+1)  # Raise the pen
-        ad.lineto(x, y+1)  # Raise the pen
-        ad.lineto(x, y)  # Raise the pen
+        ad.moveto(x, y)
+        ad.lineto(x + 2, y)
+        ad.lineto(x + 2, y + 2)
+        ad.lineto(x, y + 2)
+        ad.lineto(x, y)
         ad.moveto(0, 0)  # Return to the origin
     finally:
         ad.disconnect()

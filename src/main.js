@@ -57,11 +57,21 @@ let stableSince = 0;
 let lastDotCount = 0;
 let consoleElems = null;
 
+// Server state tracking
+let serverState = "ready";
+let calibrationPayload = { calibrationTargets: [], calibrationMatchedCount: 0 };
+let serverStateElems = null;
+
 // Initialize the socket connection
 const initSocket = () => {
   socket = io.connect("/");
   socket.on("connect", () => {
     console.log(`Connected: ${socket.id}`);
+  });
+  socket.on("serverState", (payload) => {
+    serverState = payload.state;
+    calibrationPayload = payload;
+    updateServerStateUI(payload);
   });
 };
 
@@ -91,7 +101,7 @@ async function getAvailableWebcams() {
   try {
     const devices = await navigator.mediaDevices.enumerateDevices();
     const videoDevices = devices.filter(
-      (device) => device.kind === "videoinput"
+      (device) => device.kind === "videoinput",
     );
 
     if (videoDevices.length === 0) {
@@ -178,7 +188,7 @@ async function setupWebcam() {
     // If labels are empty, get them after user has granted permission
     const devices = await navigator.mediaDevices.enumerateDevices();
     const videoDevices = devices.filter(
-      (device) => device.kind === "videoinput"
+      (device) => device.kind === "videoinput",
     );
 
     if (videoDevices.some((device) => !device.label)) {
@@ -492,7 +502,7 @@ function logDetectedDots() {
   // Now stable for DOT_STABLE_MS. Only emit if different from last emitted and debounce passed.
   const changedFromLastEmitted = dotsHaveChanged(
     stableCandidate,
-    lastDetectedDots
+    lastDetectedDots,
   );
   const timeSinceLastLog = currentTime - lastDotLogTime;
 
@@ -503,7 +513,7 @@ function logDetectedDots() {
         stableCandidate.map((dot) => ({
           x: dot.x,
           y: dot.y,
-        }))
+        })),
       );
       if (socket && socket.connected) {
         // Emit dots with maxWidth and maxHeight
@@ -579,6 +589,111 @@ function updateDotCount(count) {
 }
 
 // --- End of console UI functions ---
+
+// --- Server state UI ---
+
+function createServerStateUI() {
+  if (serverStateElems) return;
+
+  const panel = document.createElement("div");
+  panel.id = "server-state-panel";
+  panel.style.position = "fixed";
+  panel.style.top = "12px";
+  panel.style.right = "12px";
+  panel.style.background = "rgba(0,0,0,0.75)";
+  panel.style.color = "white";
+  panel.style.padding = "10px 14px";
+  panel.style.borderRadius = "6px";
+  panel.style.fontFamily = "Arial, sans-serif";
+  panel.style.fontSize = "13px";
+  panel.style.zIndex = "9999";
+  panel.style.minWidth = "200px";
+  panel.style.boxShadow = "0 2px 6px rgba(0,0,0,0.5)";
+  panel.innerHTML = `
+    <div id="state-label" style="font-weight:600;margin-bottom:8px;">Ready</div>
+    <div id="calib-progress" style="display:none;margin-bottom:8px;">Calibration: 0/4</div>
+    <button id="start-btn" style="display:none;width:100%;padding:6px;cursor:pointer;background:#4caf50;color:white;border:none;border-radius:4px;font-size:13px;">Start game</button>
+    <button id="recal-btn" style="display:none;width:100%;padding:6px;cursor:pointer;background:#ff9800;color:white;border:none;border-radius:4px;font-size:13px;margin-top:6px;">Recalibrate</button>
+  `;
+  document.body.appendChild(panel);
+
+  const startBtn = panel.querySelector("#start-btn");
+  const recalBtn = panel.querySelector("#recal-btn");
+
+  startBtn.addEventListener("click", () => {
+    if (socket && socket.connected) socket.emit("startGame");
+  });
+  recalBtn.addEventListener("click", () => {
+    if (socket && socket.connected) socket.emit("recalibrate");
+  });
+
+  serverStateElems = {
+    panel,
+    label: panel.querySelector("#state-label"),
+    calibProgress: panel.querySelector("#calib-progress"),
+    startBtn,
+    recalBtn,
+  };
+}
+
+function updateServerStateUI(payload) {
+  if (!serverStateElems) return;
+  const { state, calibrationMatchedCount } = payload;
+  const el = serverStateElems;
+
+  el.calibProgress.style.display = state === "calibrating" ? "block" : "none";
+  el.startBtn.style.display = state === "waitingForSheet" ? "block" : "none";
+  el.recalBtn.style.display = state === "ready" ? "block" : "none";
+
+  if (state === "calibrating") {
+    el.label.textContent = "Calibrating…";
+    el.calibProgress.textContent = `Calibration: ${calibrationMatchedCount}/4`;
+  } else if (state === "waitingForSheet") {
+    el.label.textContent = "Calibrated ✓ — swap to fresh sheet";
+  } else {
+    el.label.textContent = "Ready";
+  }
+}
+
+/**
+ * Draw calibration overlay on the crop canvas.
+ * Shows expected dot positions as circles; turns green as dots are seen.
+ */
+function drawCalibrationOverlay(centerX, centerY, payload) {
+  if (!payload || !payload.calibrationTargets) return;
+  const { state, calibrationTargets, calibrationMatchedCount } = payload;
+  if (state !== "calibrating") return;
+
+  cropCtx.save();
+  calibrationTargets.forEach((target, i) => {
+    const px = centerX + target.nx * TRANSFORM_WIDTH;
+    const py = centerY + target.ny * TRANSFORM_HEIGHT;
+    const matched = i < calibrationMatchedCount;
+
+    cropCtx.beginPath();
+    cropCtx.arc(px, py, 16, 0, Math.PI * 2);
+    cropCtx.strokeStyle = matched ? "#4caf50" : "rgba(255,200,0,0.9)";
+    cropCtx.lineWidth = 3;
+    cropCtx.stroke();
+
+    // Crosshair
+    cropCtx.strokeStyle = matched ? "#4caf50" : "rgba(255,200,0,0.7)";
+    cropCtx.lineWidth = 1;
+    cropCtx.beginPath();
+    cropCtx.moveTo(px - 20, py);
+    cropCtx.lineTo(px + 20, py);
+    cropCtx.moveTo(px, py - 20);
+    cropCtx.lineTo(px, py + 20);
+    cropCtx.stroke();
+
+    cropCtx.fillStyle = matched ? "#4caf50" : "rgba(255,200,0,0.9)";
+    cropCtx.font = "bold 12px Arial";
+    cropCtx.fillText(matched ? "✓" : `${i + 1}`, px + 18, py - 10);
+  });
+  cropCtx.restore();
+}
+
+// --- End server state UI ---
 
 // Check if corners have changed
 function checkCornersChanged() {
@@ -682,7 +797,7 @@ function getSelectedAreaImageData() {
     0,
     0,
     areaWidth,
-    areaHeight
+    areaHeight,
   );
 
   return tempCtx.getImageData(0, 0, areaWidth, areaHeight);
@@ -707,6 +822,9 @@ function drawTransformedView() {
 
     cropCtx.clearRect(0, 0, cropCanvas.width, cropCanvas.height);
     cropCtx.drawImage(cachedTransformedImage, centerX, centerY);
+
+    // Draw calibration overlay on cached frames too
+    drawCalibrationOverlay(centerX, centerY, calibrationPayload);
 
     // Still draw dots overlay if enabled (but don't recalculate dots)
     if (dotDetectionEnabled) {
@@ -757,7 +875,7 @@ function drawTransformedView() {
     0,
     0,
     video.videoWidth,
-    video.videoHeight
+    video.videoHeight,
   );
   const videoData = videoImageData.data;
 
@@ -769,11 +887,11 @@ function drawTransformedView() {
       // Convert canvas coordinates to video coordinates
       const videoX = Math.round(
         ((transformedPoint.x - videoDisplayRect.x) / videoDisplayRect.width) *
-          video.videoWidth
+          video.videoWidth,
       );
       const videoY = Math.round(
         ((transformedPoint.y - videoDisplayRect.y) / videoDisplayRect.height) *
-          video.videoHeight
+          video.videoHeight,
       );
 
       // Check bounds
@@ -808,6 +926,9 @@ function drawTransformedView() {
 
   // Draw to main canvas
   cropCtx.drawImage(tempCanvas, centerX, centerY);
+
+  // Draw calibration overlay when in calibrating state
+  drawCalibrationOverlay(centerX, centerY, calibrationPayload);
 
   // Detect dots in the transformed image only when image actually changed
   if (dotDetectionEnabled) {
@@ -1028,11 +1149,11 @@ function constrainPointToVideo(point) {
   return {
     x: Math.max(
       videoDisplayRect.x,
-      Math.min(point.x, videoDisplayRect.x + videoDisplayRect.width)
+      Math.min(point.x, videoDisplayRect.x + videoDisplayRect.width),
     ),
     y: Math.max(
       videoDisplayRect.y,
-      Math.min(point.y, videoDisplayRect.y + videoDisplayRect.height)
+      Math.min(point.y, videoDisplayRect.y + videoDisplayRect.height),
     ),
   };
 }
@@ -1043,6 +1164,7 @@ async function init() {
 
   // create the console view early
   createConsoleView();
+  createServerStateUI();
 
   const hasWebcams = await getAvailableWebcams();
   if (hasWebcams) {
@@ -1070,7 +1192,7 @@ async function init() {
       dotDetectionEnabled = !dotDetectionEnabled;
       console.log(
         "Dot detection:",
-        dotDetectionEnabled ? "enabled" : "disabled"
+        dotDetectionEnabled ? "enabled" : "disabled",
       );
       // Reset dot detection state when toggling
       if (dotDetectionEnabled) {
@@ -1083,7 +1205,7 @@ async function init() {
       console.log("Motion detection threshold:", MOTION_THRESHOLD);
       console.log(
         "Current motion status:",
-        lastVideoFrame ? "monitoring" : "initializing"
+        lastVideoFrame ? "monitoring" : "initializing",
       );
     }
     // Add shortcut to force log current dots
@@ -1095,7 +1217,7 @@ async function init() {
             x: dot.x,
             y: dot.y,
             size: dot.size,
-          }))
+          })),
         );
       } else {
         console.log("No dots currently detected");
