@@ -1,5 +1,14 @@
 import "./style.css"; // Import styles
 import { io } from "socket.io-client";
+import {
+  solveLinearSystem,
+  getPerspectiveTransform,
+  transformPoint,
+} from "./lib/homography.js";
+import {
+  detectDots as _detectDots,
+  dotsHaveChanged as _dotsHaveChanged,
+} from "./lib/dotDetection.js";
 
 // Get DOM elements
 const canvas = document.getElementById("canvas");
@@ -234,177 +243,20 @@ function drawRectangleOverlay() {
   });
 }
 
-// Perspective transformation function
-function getPerspectiveTransform(src, dst) {
-  // src and dst are arrays of 4 points: [{x, y}, {x, y}, {x, y}, {x, y}]
-  // This creates a transformation matrix from source quadrilateral to destination rectangle
+// Perspective transformation — imported from lib/homography.js
+// (getPerspectiveTransform, solveLinearSystem, transformPoint)
 
-  const A = [];
-  const b = [];
-
-  for (let i = 0; i < 4; i++) {
-    const sx = src[i].x;
-    const sy = src[i].y;
-    const dx = dst[i].x;
-    const dy = dst[i].y;
-
-    A.push([sx, sy, 1, 0, 0, 0, -dx * sx, -dx * sy]);
-    A.push([0, 0, 0, sx, sy, 1, -dy * sx, -dy * sy]);
-
-    b.push(dx);
-    b.push(dy);
-  }
-
-  // Solve the linear system using Gaussian elimination
-  const matrix = solveLinearSystem(A, b);
-  matrix.push(1); // h33 = 1
-
-  return matrix;
-}
-
-// Simple Gaussian elimination solver
-function solveLinearSystem(A, b) {
-  const n = A.length;
-  const augmented = A.map((row, i) => [...row, b[i]]);
-
-  // Forward elimination
-  for (let i = 0; i < n; i++) {
-    // Find pivot
-    let maxRow = i;
-    for (let k = i + 1; k < n; k++) {
-      if (Math.abs(augmented[k][i]) > Math.abs(augmented[maxRow][i])) {
-        maxRow = k;
-      }
-    }
-    [augmented[i], augmented[maxRow]] = [augmented[maxRow], augmented[i]];
-
-    // Eliminate
-    for (let k = i + 1; k < n; k++) {
-      const factor = augmented[k][i] / augmented[i][i];
-      for (let j = i; j < n + 1; j++) {
-        augmented[k][j] -= factor * augmented[i][j];
-      }
-    }
-  }
-
-  // Back substitution
-  const solution = new Array(n);
-  for (let i = n - 1; i >= 0; i--) {
-    solution[i] = augmented[i][n];
-    for (let j = i + 1; j < n; j++) {
-      solution[i] -= augmented[i][j] * solution[j];
-    }
-    solution[i] /= augmented[i][i];
-  }
-
-  return solution;
-}
-
-// Apply perspective transformation to a point
-function transformPoint(x, y, matrix) {
-  const [h11, h12, h13, h21, h22, h23, h31, h32, h33] = matrix;
-
-  const denominator = h31 * x + h32 * y + h33;
-  const newX = (h11 * x + h12 * y + h13) / denominator;
-  const newY = (h21 * x + h22 * y + h23) / denominator;
-
-  return { x: newX, y: newY };
-}
-
-// Detect black dots in the transformed image
+// Dot detection — imported from lib/dotDetection.js
+// Wrap lib functions to use module-level constants
 function detectDots(imageData) {
-  const dots = [];
-  const data = imageData.data;
-  const width = imageData.width;
-  const height = imageData.height;
-
-  // Create a binary mask for black pixels
-  const binaryMask = new Uint8Array(width * height);
-
-  // Convert to grayscale and threshold
-  for (let i = 0; i < data.length; i += 4) {
-    const r = data[i];
-    const g = data[i + 1];
-    const b = data[i + 2];
-
-    // Convert to grayscale
-    const gray = 0.299 * r + 0.587 * g + 0.114 * b;
-
-    // Threshold to detect dark pixels
-    const pixelIndex = Math.floor(i / 4);
-    binaryMask[pixelIndex] = gray < DOT_DETECTION_THRESHOLD ? 1 : 0;
-  }
-
-  // Find connected components (dots)
-  const visited = new Uint8Array(width * height);
-
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const index = y * width + x;
-
-      if (binaryMask[index] === 1 && visited[index] === 0) {
-        // Found a new dark region - flood fill to find its size and center
-        const component = floodFill(binaryMask, visited, x, y, width, height);
-
-        if (component.size >= MIN_DOT_SIZE && component.size <= MAX_DOT_SIZE) {
-          // Calculate center of mass
-          const centerX = component.sumX / component.size;
-          const centerY = component.sumY / component.size;
-
-          dots.push({
-            x: Math.round(centerX),
-            y: Math.round(centerY),
-            size: component.size,
-            // Convert to real-world coordinates if needed
-            realX: centerX,
-            realY: centerY,
-          });
-        }
-      }
-    }
-  }
-
-  return dots;
+  return _detectDots(imageData, {
+    threshold: DOT_DETECTION_THRESHOLD,
+    minDotSize: MIN_DOT_SIZE,
+    maxDotSize: MAX_DOT_SIZE,
+  });
 }
 
-// Flood fill algorithm to find connected components
-function floodFill(mask, visited, startX, startY, width, height) {
-  const stack = [{ x: startX, y: startY }];
-  let size = 0;
-  let sumX = 0;
-  let sumY = 0;
-
-  while (stack.length > 0) {
-    const { x, y } = stack.pop();
-    const index = y * width + x;
-
-    // Check bounds and if already visited
-    if (
-      x < 0 ||
-      x >= width ||
-      y < 0 ||
-      y >= height ||
-      visited[index] === 1 ||
-      mask[index] === 0
-    ) {
-      continue;
-    }
-
-    // Mark as visited
-    visited[index] = 1;
-    size++;
-    sumX += x;
-    sumY += y;
-
-    // Add neighbors to stack
-    stack.push({ x: x + 1, y: y });
-    stack.push({ x: x - 1, y: y });
-    stack.push({ x: x, y: y + 1 });
-    stack.push({ x: x, y: y - 1 });
-  }
-
-  return { size, sumX, sumY };
-}
+// Flood fill — included in lib/dotDetection.js (not needed here directly)
 
 // Draw detected dots overlay
 function drawDotsOverlay() {
@@ -446,25 +298,9 @@ function drawDotsOverlay() {
 }
 
 // Check if detected dots have significantly changed
+// Uses lib/dotDetection.js dotsHaveChanged with module-level tolerance
 function dotsHaveChanged(newDots, oldDots) {
-  if (newDots.length !== oldDots.length) return true;
-
-  // Sort dots by position for comparison
-  const sortDots = (dots) =>
-    dots.slice().sort((a, b) => a.x - b.x || a.y - b.y);
-  const sortedNew = sortDots(newDots);
-  const sortedOld = sortDots(oldDots);
-
-  for (let i = 0; i < sortedNew.length; i++) {
-    const deltaX = Math.abs(sortedNew[i].x - sortedOld[i].x);
-    const deltaY = Math.abs(sortedNew[i].y - sortedOld[i].y);
-
-    if (deltaX > DOT_POSITION_TOLERANCE || deltaY > DOT_POSITION_TOLERANCE) {
-      return true;
-    }
-  }
-
-  return false;
+  return _dotsHaveChanged(newDots, oldDots, DOT_POSITION_TOLERANCE);
 }
 
 // Log detected dots to console with debouncing

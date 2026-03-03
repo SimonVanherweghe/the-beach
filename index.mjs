@@ -5,6 +5,13 @@ import http from "http";
 import fs from "fs";
 import { $, argv } from "zx";
 import { Server } from "socket.io";
+import {
+  computeAffineTransform,
+  applyAffineTransform,
+  distanceBetween,
+  getFarthestPoint,
+  sortDotsBySpatialOrder,
+} from "./src/lib/geometry.js";
 
 const app = express();
 const httpServer = http.createServer(app);
@@ -57,73 +64,7 @@ let calibrationMatchedCount = 0;
 const CALIBRATION_FILE = "./calibration.json";
 let pixelToMmMatrix = null; // [[a,b,c],[d,e,f]]: x_mm = a*px + b*py + c
 
-// ---------------------------------------------------------------------------
-// Affine transform helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Compute a 2×3 affine matrix from 4 pixel→mm point correspondences.
- * pixelPoints: [{x,y}, ...]  (crop-canvas pixel space, 0–TRANSFORM_WIDTH/HEIGHT)
- * mmPoints:    [{x,y}, ...]  (paper mm space)
- * Returns [[a,b,c],[d,e,f]] where:
- *   x_mm = a*px + b*py + c
- *   y_mm = d*px + e*py + f
- */
-function computeAffineTransform(pixelPoints, mmPoints) {
-  const A = pixelPoints.map((p) => [p.x, p.y, 1]);
-  const bx = mmPoints.map((p) => p.x);
-  const by = mmPoints.map((p) => p.y);
-  return [solveLeastSquares3(A, bx), solveLeastSquares3(A, by)];
-}
-
-/** Least-squares solve of A (n×3) * x = b using normal equations A^T A x = A^T b */
-function solveLeastSquares3(A, b) {
-  const ATA = [
-    [0, 0, 0],
-    [0, 0, 0],
-    [0, 0, 0],
-  ];
-  const ATb = [0, 0, 0];
-  for (let i = 0; i < A.length; i++) {
-    for (let r = 0; r < 3; r++) {
-      ATb[r] += A[i][r] * b[i];
-      for (let c = 0; c < 3; c++) {
-        ATA[r][c] += A[i][r] * A[i][c];
-      }
-    }
-  }
-  return solveLinear3x3(ATA, ATb);
-}
-
-/** Solve a 3×3 linear system via Gaussian elimination */
-function solveLinear3x3(A, b) {
-  const n = 3;
-  const aug = A.map((row, i) => [...row, b[i]]);
-  for (let i = 0; i < n; i++) {
-    let maxRow = i;
-    for (let k = i + 1; k < n; k++) {
-      if (Math.abs(aug[k][i]) > Math.abs(aug[maxRow][i])) maxRow = k;
-    }
-    [aug[i], aug[maxRow]] = [aug[maxRow], aug[i]];
-    for (let k = i + 1; k < n; k++) {
-      const f = aug[k][i] / aug[i][i];
-      for (let j = i; j <= n; j++) aug[k][j] -= f * aug[i][j];
-    }
-  }
-  const x = new Array(n);
-  for (let i = n - 1; i >= 0; i--) {
-    x[i] = aug[i][n];
-    for (let j = i + 1; j < n; j++) x[i] -= aug[i][j] * x[j];
-    x[i] /= aug[i][i];
-  }
-  return x;
-}
-
-function applyAffineTransform(matrix, px, py) {
-  const [a, b, c] = matrix[0];
-  const [d, e, f] = matrix[1];
-  return { x: a * px + b * py + c, y: d * px + e * py + f };
-}
+// Affine transform, distance, farthest-point, spatial sort — imported from src/lib/geometry.js
 
 // ---------------------------------------------------------------------------
 // Calibration persistence
@@ -177,51 +118,7 @@ const plotDot = async (x, y) => {
   await $`python plotdot.py ${x} ${y}`;
 };
 
-// ---------------------------------------------------------------------------
-// Dot placement algorithm (p5.js globals replaced with Math.*)
-// ---------------------------------------------------------------------------
-
-function distanceBetween(p1, p2) {
-  return Math.hypot(p1.x - p2.x, p1.y - p2.y);
-}
-
-const getFarthestPoint = (points, width, height) => {
-  const numCandidates = 100;
-  if (points.length === 0) {
-    return { x: Math.random() * width, y: Math.random() * height };
-  }
-  let farthestPoint = null;
-  let maxMinDistance = -1;
-  for (let i = 0; i < numCandidates; i++) {
-    const candidate = { x: Math.random() * width, y: Math.random() * height };
-    let minDistance = Infinity;
-    for (const existingPoint of points) {
-      const distance = distanceBetween(candidate, existingPoint);
-      if (distance < minDistance) minDistance = distance;
-    }
-    if (minDistance > maxMinDistance) {
-      maxMinDistance = minDistance;
-      farthestPoint = candidate;
-    }
-  }
-  return farthestPoint;
-};
-
-// ---------------------------------------------------------------------------
-// Calibration dot matching via spatial sort (TL, TR, BL, BR)
-// ---------------------------------------------------------------------------
-
-function sortDotsBySpatialOrder(dots) {
-  // Sort all by x+y sum: smallest = TL, largest = BR
-  const sorted = dots.slice().sort((a, b) => a.x + a.y - (b.x + b.y));
-  const tl = sorted[0];
-  const br = sorted[sorted.length - 1];
-  const rest = sorted.slice(1, sorted.length - 1);
-  // Among the middle two, smaller y = TR, larger y = BL
-  const tr = rest[0].y <= rest[1].y ? rest[0] : rest[1];
-  const bl = rest[0].y <= rest[1].y ? rest[1] : rest[0];
-  return [tl, tr, bl, br]; // matches calibrationDots order
-}
+// Dot placement + spatial sort — imported from src/lib/geometry.js
 
 // ---------------------------------------------------------------------------
 // Calibration run: plot 4 corner dots, then wait for webcam detection
