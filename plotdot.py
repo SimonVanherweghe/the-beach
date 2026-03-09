@@ -1,10 +1,26 @@
 import sys
 import time
+import math
 import json
 
 from pyaxidraw import axidraw
 
-DOT_SIZE = 1  # mm – side length of the square dot
+DOT_RADIUS = 1.5   # mm – radius of the filled spiral dot
+ARM_SPACING = 0.8  # mm – distance between spiral arms (controls fill density)
+
+
+def draw_spiral(ad, cx, cy):
+    """Draw a filled Archimedean spiral centred at (cx, cy)."""
+    turns = DOT_RADIUS / ARM_SPACING
+    total_angle = 2 * math.pi * turns
+    steps = int(turns * 60)  # ~60 segments per revolution for a smooth curve
+
+    ad.moveto(cx, cy)
+    time.sleep(0.3)
+    for i in range(1, steps + 1):
+        theta = total_angle * i / steps
+        r = DOT_RADIUS * theta / total_angle
+        ad.lineto(cx + r * math.cos(theta), cy + r * math.sin(theta))
 
 
 def draw_dots(dots):
@@ -21,12 +37,7 @@ def draw_dots(dots):
         for i, dot in enumerate(dots):
             x, y = dot['x'], dot['y']
             print(f"Drawing dot {i+1}/{len(dots)} at ({x:.1f}, {y:.1f}) mm", flush=True)
-            ad.moveto(x, y)
-            time.sleep(0.3)
-            ad.lineto(x + DOT_SIZE, y)
-            ad.lineto(x + DOT_SIZE, y + DOT_SIZE)
-            ad.lineto(x, y + DOT_SIZE)
-            ad.lineto(x, y)
+            draw_spiral(ad, x, y)
             time.sleep(0.3)
         ad.moveto(0, 0)
         print("All dots drawn.", flush=True)
