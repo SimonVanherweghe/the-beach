@@ -20,12 +20,35 @@ let video, socket;
 let currentStream = null;
 
 // Rectangle corner points - starts with default values
-let corners = [
+const CORNERS_STORAGE_KEY = "perspective-corners";
+let corners = loadCorners() || [
   { x: 100, y: 100 }, // top-left
   { x: 500, y: 100 }, // top-right
   { x: 500, y: 400 }, // bottom-right
   { x: 100, y: 400 }, // bottom-left
 ];
+
+function loadCorners() {
+  try {
+    const stored = localStorage.getItem(CORNERS_STORAGE_KEY);
+    if (!stored) return null;
+    const parsed = JSON.parse(stored);
+    if (
+      Array.isArray(parsed) &&
+      parsed.length === 4 &&
+      parsed.every((p) => typeof p.x === "number" && typeof p.y === "number")
+    ) {
+      return parsed;
+    }
+  } catch {
+    /* ignore corrupt data */
+  }
+  return null;
+}
+
+function saveCorners() {
+  localStorage.setItem(CORNERS_STORAGE_KEY, JSON.stringify(corners));
+}
 let activeCornerIndex = -1; // -1 means no corner is active
 const cornerRadius = 10; // radius of corner handles for interaction
 
@@ -447,6 +470,10 @@ function createServerStateUI() {
   panel.style.boxShadow = "0 2px 6px rgba(0,0,0,0.5)";
   panel.innerHTML = `
     <div id="state-label" style="font-weight:600;margin-bottom:8px;">Ready</div>
+    <div id="paper-select-row" style="margin-bottom:8px;">
+      <label for="paper-select" style="font-size:12px;">Paper:</label>
+      <select id="paper-select" style="margin-left:4px;padding:2px 4px;font-size:12px;"></select>
+    </div>
     <div id="calib-progress" style="display:none;margin-bottom:8px;">Calibration: 0/4</div>
     <button id="start-btn" style="display:none;width:100%;padding:6px;cursor:pointer;background:#4caf50;color:white;border:none;border-radius:4px;font-size:13px;">Start game</button>
     <button id="recal-btn" style="display:none;width:100%;padding:6px;cursor:pointer;background:#ff9800;color:white;border:none;border-radius:4px;font-size:13px;margin-top:6px;">Recalibrate</button>
@@ -455,12 +482,17 @@ function createServerStateUI() {
 
   const startBtn = panel.querySelector("#start-btn");
   const recalBtn = panel.querySelector("#recal-btn");
+  const paperSelect = panel.querySelector("#paper-select");
 
   startBtn.addEventListener("click", () => {
     if (socket && socket.connected) socket.emit("startGame");
   });
   recalBtn.addEventListener("click", () => {
     if (socket && socket.connected) socket.emit("recalibrate");
+  });
+  paperSelect.addEventListener("change", () => {
+    if (socket && socket.connected)
+      socket.emit("setPaperSize", paperSelect.value);
   });
 
   serverStateElems = {
@@ -469,17 +501,33 @@ function createServerStateUI() {
     calibProgress: panel.querySelector("#calib-progress"),
     startBtn,
     recalBtn,
+    paperSelect,
   };
 }
 
 function updateServerStateUI(payload) {
   if (!serverStateElems) return;
-  const { state, calibrationMatchedCount } = payload;
+  const { state, calibrationMatchedCount, paperSizes, currentPaperName } =
+    payload;
   const el = serverStateElems;
+
+  // Populate paper size dropdown if options changed
+  if (paperSizes && el.paperSelect.options.length !== paperSizes.length) {
+    el.paperSelect.innerHTML = "";
+    paperSizes.forEach((name) => {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      el.paperSelect.appendChild(opt);
+    });
+  }
+  if (currentPaperName) {
+    el.paperSelect.value = currentPaperName;
+  }
 
   el.calibProgress.style.display = state === "calibrating" ? "block" : "none";
   el.startBtn.style.display = state === "waitingForSheet" ? "block" : "none";
-  el.recalBtn.style.display = state === "ready" ? "block" : "none";
+  el.recalBtn.style.display = state === "calibrating" ? "none" : "block";
 
   if (state === "calibrating") {
     el.label.textContent = "Calibrating…";
@@ -958,6 +1006,9 @@ function setupInteraction() {
       controls.style.opacity = "1";
     }
 
+    if (activeCornerIndex !== -1) {
+      saveCorners();
+    }
     activeCornerIndex = -1;
   }
 

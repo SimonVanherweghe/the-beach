@@ -35,29 +35,36 @@ const setState = (newState) => {
   io.emit("serverState", buildStatePayload());
 };
 
+// Paper sizes in landscape orientation (long edge = X, short edge = Y)
+// to match AxiDraw V3/A3 travel: ~430 mm (X) × ~297 mm (Y)
 const paperSizes = {
-  A6: { width: 105, height: 148 },
-  A5: { width: 148, height: 210 },
-  A4: { width: 210, height: 297 },
-  A3: { width: 297, height: 420 },
+  A6: { width: 148, height: 105 },
+  A5: { width: 210, height: 148 },
+  A4: { width: 297, height: 210 },
+  A3: { width: 420, height: 297 },
 };
 
-const currentPaper = paperSizes.A6;
+let currentPaperName = "A3";
+let currentPaper = paperSizes[currentPaperName];
 
 // Calibration dots at 10%/90% of paper corners, in mm
 // Order: top-left, top-right, bottom-left, bottom-right
-const calibrationDots = [
-  { targetX: currentPaper.width * 0.1, targetY: currentPaper.height * 0.1 }, // TL
-  { targetX: currentPaper.width * 0.9, targetY: currentPaper.height * 0.1 }, // TR
-  { targetX: currentPaper.width * 0.1, targetY: currentPaper.height * 0.9 }, // BL
-  { targetX: currentPaper.width * 0.9, targetY: currentPaper.height * 0.9 }, // BR
-];
+let calibrationDots = [];
+let calibrationNormalizedTargets = [];
 
-// Normalized (0–1) targets sent to the client for the calibration overlay
-const calibrationNormalizedTargets = calibrationDots.map((d) => ({
-  nx: d.targetX / currentPaper.width,
-  ny: d.targetY / currentPaper.height,
-}));
+function recalcCalibration() {
+  calibrationDots = [
+    { targetX: currentPaper.width * 0.1, targetY: currentPaper.height * 0.1 }, // TL
+    { targetX: currentPaper.width * 0.9, targetY: currentPaper.height * 0.1 }, // TR
+    { targetX: currentPaper.width * 0.1, targetY: currentPaper.height * 0.9 }, // BL
+    { targetX: currentPaper.width * 0.9, targetY: currentPaper.height * 0.9 }, // BR
+  ];
+  calibrationNormalizedTargets = calibrationDots.map((d) => ({
+    nx: d.targetX / currentPaper.width,
+    ny: d.targetY / currentPaper.height,
+  }));
+}
+recalcCalibration();
 
 let calibrationMatchedCount = 0;
 
@@ -107,15 +114,22 @@ function buildStatePayload() {
     state: currentState,
     calibrationTargets: calibrationNormalizedTargets,
     calibrationMatchedCount,
+    paperSizes: Object.keys(paperSizes),
+    currentPaperName,
   };
 }
 
 // ---------------------------------------------------------------------------
-// Plot dot – x, y in mm; plotdot.py uses units=1 (mm)
+// Plot dot(s) – coordinates in mm; plotdot.py uses units=2 (mm)
 // ---------------------------------------------------------------------------
 
+const plotDots = async (dots) => {
+  const json = JSON.stringify(dots);
+  await $`.venv/bin/python plotdot.py ${json}`;
+};
+
 const plotDot = async (x, y) => {
-  await $`python plotdot.py ${x} ${y}`;
+  await plotDots([{ x, y }]);
 };
 
 // Dot placement + spatial sort — imported from src/lib/geometry.js
@@ -128,10 +142,15 @@ const runCalibration = async () => {
   calibrationMatchedCount = 0;
   setState(STATE.CALIBRATING);
   console.log("Starting calibration – plotting 4 corner dots…");
-  for (const dot of calibrationDots) {
-    await plotDot(dot.targetX, dot.targetY);
+  try {
+    await plotDots(
+      calibrationDots.map((d) => ({ x: d.targetX, y: d.targetY })),
+    );
+    console.log("All calibration dots plotted. Waiting for webcam detection…");
+  } catch (e) {
+    console.error("Calibration plotting failed (plotter error):", e.message);
+    setState(STATE.WAITING_FOR_SHEET);
   }
-  console.log("All calibration dots plotted. Waiting for webcam detection…");
 };
 
 // ---------------------------------------------------------------------------
@@ -150,7 +169,12 @@ const createNewDot = async ({ dots, maxWidth, maxHeight }) => {
   console.log(
     `Plotting new dot at (${mm.x.toFixed(1)}, ${mm.y.toFixed(1)}) mm`,
   );
-  await plotDot(mm.x, mm.y);
+  try {
+    await plotDot(mm.x, mm.y);
+  } catch (e) {
+    console.error("Plotting failed (plotter error):", e.message);
+    return;
+  }
 
   // Update previousDots so the next detectedDots event sees this dot
   previousDots = dots.concat([{ x: newDot.x, y: newDot.y }]);
@@ -205,6 +229,17 @@ io.on("connection", async (socket) => {
   socket.on("recalibrate", async () => {
     console.log("Recalibration requested by client");
     await runCalibration();
+  });
+
+  // Client selects a different paper size
+  socket.on("setPaperSize", (name) => {
+    if (!paperSizes[name]) return;
+    console.log(`Paper size changed to ${name}`);
+    currentPaperName = name;
+    currentPaper = paperSizes[name];
+    recalcCalibration();
+    pixelToMmMatrix = null;
+    io.emit("serverState", buildStatePayload());
   });
 
   socket.on("detectedDots", async (detection) => {
