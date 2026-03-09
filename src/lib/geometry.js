@@ -87,17 +87,36 @@ export function distanceBetween(p1, p2) {
  * Find the point farthest from all existing points.
  * Samples `numCandidates` random candidates and picks the one whose minimum
  * distance to any existing point is the largest.
+ *
+ * `borderSamples` virtual dots are placed evenly along each edge so that
+ * candidates near the border score no better than those near a real dot —
+ * this naturally discourages placing new dots at the edges.
  */
-export function getFarthestPoint(points, width, height, numCandidates = 100) {
-  if (points.length === 0) {
-    return { x: Math.random() * width, y: Math.random() * height };
+export function getFarthestPoint(
+  points,
+  width,
+  height,
+  numCandidates = 100,
+  borderSamples = 20,
+) {
+  // Build virtual border dots evenly spaced along all 4 edges
+  const borderPoints = [];
+  for (let i = 0; i < borderSamples; i++) {
+    const t = i / (borderSamples - 1);
+    borderPoints.push({ x: t * width, y: 0 }); // top
+    borderPoints.push({ x: t * width, y: height }); // bottom
+    borderPoints.push({ x: 0, y: t * height }); // left
+    borderPoints.push({ x: width, y: t * height }); // right
   }
+
+  const allPoints = [...points, ...borderPoints];
+
   let farthestPoint = null;
   let maxMinDistance = -1;
   for (let i = 0; i < numCandidates; i++) {
     const candidate = { x: Math.random() * width, y: Math.random() * height };
     let minDistance = Infinity;
-    for (const existingPoint of points) {
+    for (const existingPoint of allPoints) {
       const distance = distanceBetween(candidate, existingPoint);
       if (distance < minDistance) minDistance = distance;
     }

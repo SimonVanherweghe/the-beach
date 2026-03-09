@@ -92,4 +92,15 @@ describe("getFarthestPoint", () => {
     const minDist = Math.min(...cluster.map((p) => distanceBetween(result, p)));
     expect(minDist).toBeGreaterThan(50);
   });
+
+  it("avoids placing points near the canvas border", () => {
+    // With no real dots the algorithm should still pick an interior point
+    // because the virtual border ghosts penalise edge candidates.
+    const result = getFarthestPoint([], 400, 300);
+    const margin = 20;
+    expect(result.x).toBeGreaterThan(margin);
+    expect(result.x).toBeLessThan(400 - margin);
+    expect(result.y).toBeGreaterThan(margin);
+    expect(result.y).toBeLessThan(300 - margin);
+  });
 });
