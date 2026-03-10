@@ -209,6 +209,27 @@ function setupCanvas() {
   // when we know the actual video dimensions
 }
 
+// Compute the video display rectangle (aspect-ratio-preserving fit)
+function computeVideoDisplayRect() {
+  if (!video || !video.videoWidth) return videoDisplayRect;
+  const videoAspectRatio = video.videoWidth / video.videoHeight;
+  const canvasAspectRatio = canvas.width / canvas.height;
+  let drawWidth,
+    drawHeight,
+    offsetX = 0,
+    offsetY = 0;
+  if (videoAspectRatio > canvasAspectRatio) {
+    drawWidth = canvas.width;
+    drawHeight = canvas.width / videoAspectRatio;
+    offsetY = (canvas.height - drawHeight) / 2;
+  } else {
+    drawHeight = canvas.height;
+    drawWidth = canvas.height * videoAspectRatio;
+    offsetX = (canvas.width - drawWidth) / 2;
+  }
+  return { x: offsetX, y: offsetY, width: drawWidth, height: drawHeight };
+}
+
 // Populate webcam selection dropdown
 async function getAvailableWebcams() {
   webcamSelect.innerHTML = "";
@@ -887,36 +908,14 @@ function drawVideoFrame() {
     // Clear the canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Calculate aspect ratios
-    const videoAspectRatio = video.videoWidth / video.videoHeight;
-    const canvasAspectRatio = canvas.width / canvas.height;
-
-    // Variables to store the drawing dimensions
-    let drawWidth,
-      drawHeight,
-      offsetX = 0,
-      offsetY = 0;
-
-    // Determine how to scale the video to maintain aspect ratio
-    if (videoAspectRatio > canvasAspectRatio) {
-      // Video is wider than canvas - constrain by width
-      drawWidth = canvas.width;
-      drawHeight = canvas.width / videoAspectRatio;
-      offsetY = (canvas.height - drawHeight) / 2;
-    } else {
-      // Video is taller than canvas - constrain by height
-      drawHeight = canvas.height;
-      drawWidth = canvas.height * videoAspectRatio;
-      offsetX = (canvas.width - drawWidth) / 2;
-    }
-
-    // Store the video display rectangle for constraining the corners
-    videoDisplayRect = {
+    // Compute the video display rectangle (aspect-ratio-preserving fit)
+    videoDisplayRect = computeVideoDisplayRect();
+    const {
       x: offsetX,
       y: offsetY,
       width: drawWidth,
       height: drawHeight,
-    };
+    } = videoDisplayRect;
 
     // If this is the first render or after resize, initialize/adjust the corners
     if (
@@ -1066,21 +1065,24 @@ function setupInteraction() {
   }
 
   function getEventPosition(e) {
-    let x, y;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    let clientX, clientY;
 
     if (e.type.startsWith("touch")) {
-      // Touch event
       const touch = e.touches[0] || e.changedTouches[0];
-      const rect = canvas.getBoundingClientRect();
-      x = touch.clientX - rect.left;
-      y = touch.clientY - rect.top;
+      clientX = touch.clientX;
+      clientY = touch.clientY;
     } else {
-      // Mouse event
-      x = e.offsetX;
-      y = e.offsetY;
+      clientX = e.clientX;
+      clientY = e.clientY;
     }
 
-    return { x, y };
+    return {
+      x: (clientX - rect.left) * scaleX,
+      y: (clientY - rect.top) * scaleY,
+    };
   }
 }
 
@@ -1117,7 +1119,25 @@ async function init() {
 
   // Handle window resize
   window.addEventListener("resize", () => {
+    const oldRect = { ...videoDisplayRect };
     setupCanvas();
+    const newRect = computeVideoDisplayRect();
+    videoDisplayRect = newRect;
+
+    // Scale corners proportionally from old video rect to new
+    if (
+      oldRect.width > 0 &&
+      oldRect.height > 0 &&
+      newRect.width > 0 &&
+      newRect.height > 0
+    ) {
+      corners = corners.map((c) => ({
+        x: newRect.x + ((c.x - oldRect.x) / oldRect.width) * newRect.width,
+        y: newRect.y + ((c.y - oldRect.y) / oldRect.height) * newRect.height,
+      }));
+      saveCorners();
+    }
+
     // Invalidate cache on resize
     cachedTransformedImage = null;
     lastVideoFrame = null;
