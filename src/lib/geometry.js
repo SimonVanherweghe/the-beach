@@ -96,13 +96,13 @@ export function getFarthestPoint(
   points,
   width,
   height,
-  { margin = 0, numCandidates = 100, borderSamples = 20 } = {},
+  { margin = 0, numCandidates = 100, borderSamples = 20, bounds = null } = {},
 ) {
-  // Safe area boundaries (inset by margin)
-  const minX = margin;
-  const minY = margin;
-  const maxX = width - margin;
-  const maxY = height - margin;
+  // Safe area boundaries (inset by margin, or explicit bounds)
+  const minX = bounds?.minX ?? margin;
+  const minY = bounds?.minY ?? margin;
+  const maxX = bounds?.maxX ?? width - margin;
+  const maxY = bounds?.maxY ?? height - margin;
   const safeW = maxX - minX;
   const safeH = maxY - minY;
 

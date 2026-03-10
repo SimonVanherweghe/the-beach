@@ -25,7 +25,9 @@ let isPlotting = false;
 const STATE = {
   CALIBRATING: "calibrating",
   WAITING_FOR_SHEET: "waitingForSheet",
+  DRAWING_BORDER: "drawingBorder",
   READY: "ready",
+  DONE: "done",
 };
 
 let currentState = STATE.READY;
@@ -51,6 +53,13 @@ let currentPaper = paperSizes[currentPaperName];
 // Safe margin in mm – dots within this distance from the paper edge are
 // neither plotted nor detected (≈ 1.5 cm).
 const MARGIN_MM = 15;
+
+// Wider margin on the right side (landscape) = portrait bottom, to leave
+// room for the "The beach" label text.
+const TEXT_MARGIN_MM = 30;
+
+// Maximum number of safe dots before the beach is "full".
+const MAX_DOTS = 150;
 
 // Calibration dots at 10%/90% of paper corners, in mm
 // Order: top-left, top-right, bottom-left, bottom-right
@@ -123,6 +132,8 @@ function buildStatePayload() {
     calibrationMatchedCount,
     paperSizes: Object.keys(paperSizes),
     currentPaperName,
+    dotCount: previousDots.length,
+    maxDots: MAX_DOTS,
   };
 }
 
@@ -175,10 +186,16 @@ const createNewDot = async ({ dots, maxWidth, maxHeight }) => {
     console.warn("⚠ Not calibrated – skipping plot");
     return;
   }
-  // Compute margin in pixel space (proportional to the crop canvas)
+  // Compute margins in pixel space (proportional to the crop canvas)
   const marginPx = MARGIN_MM * (maxWidth / currentPaper.width);
+  const marginPxRight = TEXT_MARGIN_MM * (maxWidth / currentPaper.width);
   const newDot = getFarthestPoint(dots, maxWidth, maxHeight, {
-    margin: marginPx,
+    bounds: {
+      minX: marginPx,
+      minY: marginPx,
+      maxX: maxWidth - marginPxRight,
+      maxY: maxHeight - marginPx,
+    },
   });
   if (!newDot) {
     console.warn(
@@ -193,16 +210,16 @@ const createNewDot = async ({ dots, maxWidth, maxHeight }) => {
     `Plotting new dot at (${mm.x.toFixed(1)}, ${mm.y.toFixed(1)}) mm`,
   );
 
-  // Validate coordinates are within the safe area (paper bounds minus margin)
+  // Validate coordinates are within the safe area (asymmetric: right side uses TEXT_MARGIN_MM)
   if (
     mm.x < MARGIN_MM ||
     mm.y < MARGIN_MM ||
-    mm.x > currentPaper.width - MARGIN_MM ||
+    mm.x > currentPaper.width - TEXT_MARGIN_MM ||
     mm.y > currentPaper.height - MARGIN_MM
   ) {
     console.error(
       `Dot (${mm.x.toFixed(1)}, ${mm.y.toFixed(1)}) mm is outside safe area ` +
-        `(margin ${MARGIN_MM} mm inside ${currentPaper.width}×${currentPaper.height} mm) – skipping.`,
+        `(margins ${MARGIN_MM}/${TEXT_MARGIN_MM} mm inside ${currentPaper.width}×${currentPaper.height} mm) – skipping.`,
     );
     return;
   }
@@ -219,6 +236,31 @@ const createNewDot = async ({ dots, maxWidth, maxHeight }) => {
 
   // Update previousDots so the next detectedDots event sees this dot
   previousDots = dots.concat([{ x: newDot.x, y: newDot.y }]);
+
+  // Check if the beach is full
+  if (previousDots.length >= MAX_DOTS) {
+    console.log(
+      `🏖 Beach is full (${previousDots.length} dots) – drawing completion text…`,
+    );
+    const now = new Date();
+    const stamp =
+      now.toLocaleDateString("nl-BE", {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+      }) +
+      " " +
+      now.toLocaleTimeString("nl-BE", { hour: "2-digit", minute: "2-digit" });
+    isPlotting = true;
+    try {
+      await $`.venv/bin/python plotborder.py --complete ${stamp} ${currentPaper.width} ${currentPaper.height} ${MARGIN_MM} ${TEXT_MARGIN_MM}`;
+    } catch (e) {
+      console.error("Completion text failed (plotter error):", e.message);
+    } finally {
+      isPlotting = false;
+    }
+    setState(STATE.DONE);
+  }
 };
 
 // ---------------------------------------------------------------------------
@@ -258,17 +300,28 @@ io.on("connection", async (socket) => {
   });
 
   // Client confirms sheet has been swapped → start the game
-  socket.on("startGame", () => {
-    if (currentState === STATE.WAITING_FOR_SHEET) {
-      // Initialise previousDots length to match the safe dots already on the
-      // sheet so the first human dot (not a pre-existing dot) triggers
-      // the plotter response.
-      previousDots = Array.from({ length: lastWaitingSafeCount }, () => ({}));
-      setState(STATE.READY);
-      console.log(
-        `Game started. Baseline: ${previousDots.length} safe dot(s) already on sheet.`,
-      );
+  socket.on("startGame", async () => {
+    if (currentState !== STATE.WAITING_FOR_SHEET) return;
+    // Initialise previousDots length to match the safe dots already on the
+    // sheet so the first human dot (not a pre-existing dot) triggers
+    // the plotter response.
+    previousDots = Array.from({ length: lastWaitingSafeCount }, () => ({}));
+
+    // Draw the wavy border + "The beach" label before accepting dots
+    setState(STATE.DRAWING_BORDER);
+    isPlotting = true;
+    try {
+      await $`.venv/bin/python plotborder.py ${currentPaper.width} ${currentPaper.height} ${MARGIN_MM} ${TEXT_MARGIN_MM}`;
+    } catch (e) {
+      console.error("Border drawing failed (plotter error):", e.message);
+    } finally {
+      isPlotting = false;
     }
+
+    setState(STATE.READY);
+    console.log(
+      `Game started. Baseline: ${previousDots.length} safe dot(s) already on sheet.`,
+    );
   });
 
   // Client requests a new calibration run (no server restart needed)
@@ -347,11 +400,12 @@ io.on("connection", async (socket) => {
 
     if (currentState === STATE.READY) {
       // Filter out dots that fall within the safe margin (in mm)
+      // Right side uses wider TEXT_MARGIN_MM for the label strip
       let marginFilteredCount = 0;
       const safeRange = {
         xMin: MARGIN_MM,
         yMin: MARGIN_MM,
-        xMax: currentPaper.width - MARGIN_MM,
+        xMax: currentPaper.width - TEXT_MARGIN_MM,
         yMax: currentPaper.height - MARGIN_MM,
       };
       const safeDots = pixelToMmMatrix
@@ -407,7 +461,7 @@ io.on("connection", async (socket) => {
         const safeRange = {
           xMin: MARGIN_MM,
           yMin: MARGIN_MM,
-          xMax: currentPaper.width - MARGIN_MM,
+          xMax: currentPaper.width - TEXT_MARGIN_MM,
           yMax: currentPaper.height - MARGIN_MM,
         };
         lastWaitingSafeCount = detection.dots.filter((d) => {

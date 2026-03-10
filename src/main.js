@@ -643,8 +643,14 @@ function createServerStateUI() {
 
 function updateServerStateUI(payload) {
   if (!serverStateElems) return;
-  const { state, calibrationMatchedCount, paperSizes, currentPaperName } =
-    payload;
+  const {
+    state,
+    calibrationMatchedCount,
+    paperSizes,
+    currentPaperName,
+    dotCount,
+    maxDots,
+  } = payload;
   const el = serverStateElems;
 
   // Populate paper size dropdown if options changed
@@ -663,15 +669,23 @@ function updateServerStateUI(payload) {
 
   el.calibProgress.style.display = state === "calibrating" ? "block" : "none";
   el.startBtn.style.display = state === "waitingForSheet" ? "block" : "none";
-  el.recalBtn.style.display = state === "calibrating" ? "none" : "block";
+  el.recalBtn.style.display =
+    state === "calibrating" || state === "drawingBorder" || state === "done"
+      ? "none"
+      : "block";
 
   if (state === "calibrating") {
     el.label.textContent = "Calibrating…";
     el.calibProgress.textContent = `Calibration: ${calibrationMatchedCount}/4`;
   } else if (state === "waitingForSheet") {
     el.label.textContent = "Calibrated ✓ — swap to fresh sheet";
+  } else if (state === "drawingBorder") {
+    el.label.textContent = "🖊 Drawing border, please wait…";
+  } else if (state === "done") {
+    el.label.textContent = `🏖 The beach is full! (${dotCount ?? "?"} dots)`;
   } else {
-    el.label.textContent = "Ready";
+    el.label.textContent =
+      dotCount != null ? `Ready — ${dotCount}/${maxDots ?? "?"} dots` : "Ready";
   }
 }
 
