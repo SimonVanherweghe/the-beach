@@ -161,6 +161,7 @@ function getSmoothedDots(rawDots) {
 
 // Dot logging debounce variables
 let lastDetectedDots = [];
+let lastDotLogTime = 0;
 const DOT_POSITION_TOLERANCE = 12; // Pixels tolerance for considering dots "same"
 
 // --- Added: require stability before emitting ---
@@ -176,6 +177,12 @@ let consoleElems = null;
 let serverState = "ready";
 let calibrationPayload = { calibrationTargets: [], calibrationMatchedCount: 0 };
 let serverStateElems = null;
+
+// Read CSS design tokens for canvas drawing
+const rootStyles = getComputedStyle(document.documentElement);
+function cssVar(name) {
+  return rootStyles.getPropertyValue(name).trim();
+}
 
 // Initialize the socket connection
 const initSocket = () => {
@@ -348,7 +355,7 @@ function drawRectangleOverlay() {
   if (corners.length !== 4) return;
 
   // Draw the rectangle lines
-  ctx.strokeStyle = "rgba(255, 0, 0, 0.8)";
+  ctx.strokeStyle = cssVar("--color-handle-stroke");
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(corners[0].x, corners[0].y);
@@ -362,8 +369,8 @@ function drawRectangleOverlay() {
   corners.forEach((corner, index) => {
     ctx.fillStyle =
       index === activeCornerIndex
-        ? "rgba(255, 255, 0, 0.8)"
-        : "rgba(255, 0, 0, 0.8)";
+        ? cssVar("--color-handle-active")
+        : cssVar("--color-handle");
     ctx.beginPath();
     ctx.arc(corner.x, corner.y, cornerRadius, 0, Math.PI * 2);
     ctx.fill();
@@ -396,10 +403,12 @@ function drawDotsOverlay() {
   const centerX = (cropCanvas.width - TRANSFORM_WIDTH) / 2;
   const centerY = (cropCanvas.height - TRANSFORM_HEIGHT) / 2;
 
+  const dotStroke = cssVar("--color-dot-marker");
+  const dotFill = cssVar("--color-dot-marker-fill");
+
   detectedDots.forEach((dot, index) => {
-    // Draw dot marker
-    cropCtx.strokeStyle = "red";
-    cropCtx.fillStyle = "rgba(255, 0, 0, 0.7)";
+    cropCtx.strokeStyle = dotStroke;
+    cropCtx.fillStyle = dotFill;
     cropCtx.lineWidth = 2;
 
     const dotX = centerX + dot.x;
@@ -416,8 +425,8 @@ function drawDotsOverlay() {
     cropCtx.fill();
 
     // Draw label with coordinates
-    cropCtx.fillStyle = "red";
-    cropCtx.font = "12px Arial";
+    cropCtx.fillStyle = dotStroke;
+    cropCtx.font = "12px system-ui, sans-serif";
     cropCtx.fillText(`(${dot.x}, ${dot.y})`, dotX + 10, dotY - 10);
   });
 
@@ -509,29 +518,16 @@ function logDetectedDots() {
 
 // Create and insert a floating console view into the page
 function createConsoleView() {
-  // Avoid creating twice
   if (consoleElems) return;
 
   const panel = document.createElement("div");
   panel.id = "mini-console";
-  // minimal inline styling so no CSS file change needed
-  panel.style.position = "fixed";
-  panel.style.right = "12px";
-  panel.style.bottom = "12px";
-  panel.style.background = "rgba(0,0,0,0.7)";
-  panel.style.color = "white";
-  panel.style.padding = "8px 12px";
-  panel.style.borderRadius = "6px";
-  panel.style.fontFamily = "Arial, sans-serif";
-  panel.style.fontSize = "13px";
-  panel.style.zIndex = "9999";
-  panel.style.minWidth = "120px";
-  panel.style.boxShadow = "0 2px 6px rgba(0,0,0,0.5)";
-
-  // Only show dots count (removed motion & sending)
+  panel.className = "floating-panel";
+  panel.setAttribute("role", "status");
+  panel.setAttribute("aria-live", "polite");
   panel.innerHTML = `
-    <div style="font-weight:600;margin-bottom:6px;">Live Console</div>
-    <div style="display:flex;justify-content:space-between;"><span>Dots:</span><span id="console-dots">0</span></div>
+    <div class="panel-heading">Console</div>
+    <div class="stat-row"><span>Dots</span><span class="stat-value" id="console-dots">0</span></div>
   `;
 
   document.body.appendChild(panel);
@@ -558,27 +554,18 @@ function createServerStateUI() {
 
   const panel = document.createElement("div");
   panel.id = "server-state-panel";
-  panel.style.position = "fixed";
-  panel.style.top = "12px";
-  panel.style.right = "12px";
-  panel.style.background = "rgba(0,0,0,0.75)";
-  panel.style.color = "white";
-  panel.style.padding = "10px 14px";
-  panel.style.borderRadius = "6px";
-  panel.style.fontFamily = "Arial, sans-serif";
-  panel.style.fontSize = "13px";
-  panel.style.zIndex = "9999";
-  panel.style.minWidth = "200px";
-  panel.style.boxShadow = "0 2px 6px rgba(0,0,0,0.5)";
+  panel.className = "floating-panel";
+  panel.setAttribute("role", "status");
+  panel.setAttribute("aria-live", "polite");
   panel.innerHTML = `
-    <div id="state-label" style="font-weight:600;margin-bottom:8px;">Ready</div>
-    <div id="paper-select-row" style="margin-bottom:8px;">
-      <label for="paper-select" style="font-size:12px;">Paper:</label>
-      <select id="paper-select" style="margin-left:4px;padding:2px 4px;font-size:12px;"></select>
+    <div class="panel-heading" id="state-label">Ready</div>
+    <div class="panel-row" id="paper-select-row">
+      <label for="paper-select">Paper:</label>
+      <select id="paper-select"></select>
     </div>
-    <div id="calib-progress" style="display:none;margin-bottom:8px;">Calibration: 0/4</div>
-    <button id="start-btn" style="display:none;width:100%;padding:6px;cursor:pointer;background:#4caf50;color:white;border:none;border-radius:4px;font-size:13px;">Start game</button>
-    <button id="recal-btn" style="display:none;width:100%;padding:6px;cursor:pointer;background:#ff9800;color:white;border:none;border-radius:4px;font-size:13px;margin-top:6px;">Recalibrate</button>
+    <div class="panel-row" id="calib-progress" style="display:none">Calibration: 0/4</div>
+    <button class="btn btn--start" id="start-btn" style="display:none">Start game</button>
+    <button class="btn btn--recalibrate" id="recal-btn" style="display:none">Recalibrate</button>
   `;
   document.body.appendChild(panel);
 
@@ -650,6 +637,10 @@ function drawCalibrationOverlay(centerX, centerY, payload) {
   const { state, calibrationTargets, calibrationMatchedCount } = payload;
   if (state !== "calibrating") return;
 
+  const calibMatched = cssVar("--color-calib-matched");
+  const calibPending = cssVar("--color-calib-pending");
+  const calibPendingDim = cssVar("--color-calib-pending-dim");
+
   cropCtx.save();
   calibrationTargets.forEach((target, i) => {
     const px = centerX + target.nx * TRANSFORM_WIDTH;
@@ -658,12 +649,12 @@ function drawCalibrationOverlay(centerX, centerY, payload) {
 
     cropCtx.beginPath();
     cropCtx.arc(px, py, 16, 0, Math.PI * 2);
-    cropCtx.strokeStyle = matched ? "#4caf50" : "rgba(255,200,0,0.9)";
+    cropCtx.strokeStyle = matched ? calibMatched : calibPending;
     cropCtx.lineWidth = 3;
     cropCtx.stroke();
 
     // Crosshair
-    cropCtx.strokeStyle = matched ? "#4caf50" : "rgba(255,200,0,0.7)";
+    cropCtx.strokeStyle = matched ? calibMatched : calibPendingDim;
     cropCtx.lineWidth = 1;
     cropCtx.beginPath();
     cropCtx.moveTo(px - 20, py);
@@ -672,8 +663,8 @@ function drawCalibrationOverlay(centerX, centerY, payload) {
     cropCtx.lineTo(px, py + 20);
     cropCtx.stroke();
 
-    cropCtx.fillStyle = matched ? "#4caf50" : "rgba(255,200,0,0.9)";
-    cropCtx.font = "bold 12px Arial";
+    cropCtx.fillStyle = matched ? calibMatched : calibPending;
+    cropCtx.font = "bold 12px system-ui, sans-serif";
     cropCtx.fillText(matched ? "✓" : `${i + 1}`, px + 18, py - 10);
   });
   cropCtx.restore();

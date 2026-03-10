@@ -1,31 +1,83 @@
+/* ─── Design Tokens ─── */
+:root {
+	/* Surface */
+	--color-bg: #1a1a1e;
+	--color-surface: rgba(20, 20, 24, 0.85);
+	--color-surface-hover: rgba(30, 30, 36, 0.9);
+	--color-border: rgba(255, 255, 255, 0.08);
 
+	/* Text */
+	--color-text: #e8e8ec;
+	--color-text-muted: #9a9aa0;
+
+	/* Semantic */
+	--color-accent-green: #4caf50;
+	--color-accent-orange: #ff9800;
+	--color-accent-red: #ef4444;
+	--color-overlay-red: rgba(239, 68, 68, 0.8);
+	--color-overlay-yellow: rgba(255, 200, 0, 0.9);
+	--color-overlay-yellow-dim: rgba(255, 200, 0, 0.7);
+
+	/* Canvas overlay (used from JS via getComputedStyle) */
+	--color-handle: var(--color-accent-red);
+	--color-handle-active: #facc15;
+	--color-handle-stroke: var(--color-overlay-red);
+	--color-dot-marker: var(--color-accent-red);
+	--color-dot-marker-fill: rgba(239, 68, 68, 0.7);
+	--color-calib-matched: var(--color-accent-green);
+	--color-calib-pending: var(--color-overlay-yellow);
+	--color-calib-pending-dim: var(--color-overlay-yellow-dim);
+
+	/* Typography */
+	--font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+	--font-mono: ui-monospace, "SF Mono", "Cascadia Code", monospace;
+	--text-xs: 0.75rem;
+	--text-sm: 0.8125rem;
+	--text-base: 0.875rem;
+
+	/* Spacing */
+	--space-xs: 4px;
+	--space-sm: 8px;
+	--space-md: 12px;
+	--space-lg: 16px;
+	--space-xl: 20px;
+
+	/* Radii */
+	--radius-sm: 4px;
+	--radius-md: 6px;
+	--radius-lg: 8px;
+
+	/* Shadows */
+	--shadow-panel: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+/* ─── Reset ─── */
 html {
 	box-sizing: border-box;
 }
-*, *::before, *::after {
+*,
+*::before,
+*::after {
 	box-sizing: inherit;
 }
 
-
-html, body {
-  margin: 0;
-  padding: 0;
-}
-canvas {
-  display: block;
-	box-shadow: rgba(100, 100, 111, 0.2) 0px 7px 29px 0px;
-	border-radius: .5em;
-}
-
+html,
 body {
 	margin: 0;
 	padding: 0;
-	overflow: hidden;
-	display: grid;
-	place-items:center;
-	height: 100vh;
 }
 
+body {
+	overflow: hidden;
+	display: grid;
+	place-items: center;
+	height: 100vh;
+	background: var(--color-bg);
+	font-family: var(--font-sans);
+	color: var(--color-text);
+}
+
+/* ─── Layout ─── */
 .canvas-container {
 	display: flex;
 	width: 100vw;
@@ -36,7 +88,12 @@ body {
 	flex: 1;
 	position: relative;
 	height: 100%;
-	border: 1px solid #333;
+	border: 1px solid var(--color-border);
+	overflow: hidden;
+}
+
+canvas {
+	display: block;
 }
 
 #canvas,
@@ -46,21 +103,149 @@ body {
 	height: 100%;
 }
 
+/* ─── Webcam controls ─── */
 #webcam-controls {
 	position: absolute;
-	top: 20px;
-	left: 20px;
+	top: var(--space-xl);
+	left: var(--space-xl);
 	z-index: 10;
-	background-color: rgba(0, 0, 0, 0.5);
-	color: white;
-	padding: 10px;
-	border-radius: 5px;
-	/* Add pointer-events: none to make it ignore mouse events */
+	background: var(--color-surface);
+	color: var(--color-text);
+	padding: var(--space-sm) var(--space-md);
+	border-radius: var(--radius-md);
+	border: 1px solid var(--color-border);
+	backdrop-filter: blur(8px);
 	pointer-events: none;
+	font-size: var(--text-sm);
 }
 
-/* Make only the select element and buttons inside the controls respond to events */
 #webcam-select,
 #webcam-controls button {
 	pointer-events: auto;
+}
+
+#webcam-select {
+	font-size: var(--text-sm);
+	font-family: var(--font-sans);
+	padding: var(--space-xs) var(--space-sm);
+	border-radius: var(--radius-sm);
+	border: 1px solid var(--color-border);
+	background: var(--color-bg);
+	color: var(--color-text);
+}
+
+/* ─── Floating panels (shared) ─── */
+.floating-panel {
+	position: fixed;
+	z-index: 9999;
+	background: var(--color-surface);
+	color: var(--color-text);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-lg);
+	backdrop-filter: blur(8px);
+	box-shadow: var(--shadow-panel);
+	font-family: var(--font-sans);
+	font-size: var(--text-sm);
+}
+
+/* ─── Mini console ─── */
+#mini-console {
+	right: var(--space-md);
+	bottom: var(--space-md);
+	padding: var(--space-sm) var(--space-md);
+	min-width: 100px;
+}
+
+#mini-console .panel-heading {
+	font-weight: 600;
+	margin-bottom: var(--space-xs);
+	color: var(--color-text-muted);
+	font-size: var(--text-xs);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+
+#mini-console .stat-row {
+	display: flex;
+	justify-content: space-between;
+	gap: var(--space-lg);
+}
+
+#mini-console .stat-row .stat-value {
+	font-variant-numeric: tabular-nums;
+	font-weight: 600;
+}
+
+/* ─── Server state panel ─── */
+#server-state-panel {
+	top: var(--space-md);
+	right: var(--space-md);
+	padding: var(--space-md) var(--space-lg);
+	min-width: 200px;
+}
+
+#server-state-panel .panel-heading {
+	font-weight: 600;
+	margin-bottom: var(--space-sm);
+}
+
+#server-state-panel .panel-row {
+	margin-bottom: var(--space-sm);
+}
+
+#server-state-panel label {
+	font-size: var(--text-xs);
+	color: var(--color-text-muted);
+}
+
+#server-state-panel select {
+	margin-left: var(--space-xs);
+	padding: var(--space-xs) var(--space-sm);
+	font-size: var(--text-sm);
+	font-family: var(--font-sans);
+	border-radius: var(--radius-sm);
+	border: 1px solid var(--color-border);
+	background: var(--color-bg);
+	color: var(--color-text);
+}
+
+/* ─── Buttons ─── */
+.btn {
+	display: block;
+	width: 100%;
+	padding: var(--space-sm) var(--space-md);
+	cursor: pointer;
+	border: none;
+	border-radius: var(--radius-sm);
+	font-size: var(--text-sm);
+	font-family: var(--font-sans);
+	font-weight: 500;
+	transition: opacity 0.15s ease;
+}
+
+.btn:hover {
+	opacity: 0.88;
+}
+
+.btn--start {
+	background: var(--color-accent-green);
+	color: #fff;
+}
+
+.btn--recalibrate {
+	background: var(--color-accent-orange);
+	color: #fff;
+	margin-top: var(--space-sm);
+}
+
+/* ─── Responsive: narrow viewport ─── */
+@media (max-width: 800px) {
+	.canvas-container {
+		flex-direction: column;
+	}
+
+	.canvas-wrapper {
+		flex: none;
+		height: 50vh;
+	}
 }

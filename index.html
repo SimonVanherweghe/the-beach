@@ -4,10 +4,7 @@
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>Webcam Feed</title>
-	<style>
-
-	</style>
+	<title>The Beach — Installation Control</title>
 </head>
 
 <body>
@@ -17,10 +14,14 @@
 				<label for="webcam-select">Choose webcam:</label>
 				<select id="webcam-select"></select>
 			</div>
-			<canvas id="canvas"></canvas>
+			<canvas id="canvas" role="img" aria-label="Live webcam feed with perspective crop overlay">
+				Live webcam view
+			</canvas>
 		</div>
 		<div class="canvas-wrapper">
-			<canvas id="crop-canvas"></canvas>
+			<canvas id="crop-canvas" role="img" aria-label="Perspective-corrected paper view">
+				Perspective-corrected view
+			</canvas>
 		</div>
 	</div>
 	<script src="./src/main.js" type="module"></script>
