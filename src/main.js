@@ -66,7 +66,6 @@ const EDGE_MARGIN_PX = 15;
 // Dot detection variables
 let detectedDots = [];
 let dotDetectionEnabled = true;
-const DOT_DETECTION_THRESHOLD = 100; // Brightness threshold (0-255)
 const MIN_DOT_SIZE = 5; // Minimum dot area in pixels
 const MAX_DOT_SIZE = 200; // Maximum dot area in pixels
 
@@ -78,10 +77,37 @@ let lastCorners = null;
 const MOTION_THRESHOLD = 5000; // Threshold for detecting motion
 const FRAME_DIFF_SAMPLE_RATE = 4; // Sample every 4th pixel for performance
 
+// Detection tuning — runtime-adjustable, persisted to localStorage
+let DOT_DETECTION_THRESHOLD_VAL = 100; // Brightness threshold (0-255)
+let EMA_ALPHA_VAL = 0.07; // Position smoothing (lower = smoother but more lag)
+let COUNT_HYSTERESIS_VAL = 4; // Frames a new count must persist before accepted
+let DOT_STABLE_MS_VAL = 500; // Ms detections must be steady before emitting
+
+const TUNING_KEY = "detection-tuning";
+function loadTuning() {
+  try {
+    const s = localStorage.getItem(TUNING_KEY);
+    if (s) return JSON.parse(s);
+  } catch {
+    /* ignore */
+  }
+  return {};
+}
+function saveTuning(obj) {
+  localStorage.setItem(TUNING_KEY, JSON.stringify(obj));
+}
+{
+  const t = loadTuning();
+  if (t.DOT_DETECTION_THRESHOLD !== undefined)
+    DOT_DETECTION_THRESHOLD_VAL = t.DOT_DETECTION_THRESHOLD;
+  if (t.COUNT_HYSTERESIS !== undefined)
+    COUNT_HYSTERESIS_VAL = t.COUNT_HYSTERESIS;
+  if (t.DOT_STABLE_MS !== undefined) DOT_STABLE_MS_VAL = t.DOT_STABLE_MS;
+  if (t.EMA_ALPHA !== undefined) EMA_ALPHA_VAL = t.EMA_ALPHA;
+}
+
 // Temporal smoothing: EMA per dot + count hysteresis.
-const EMA_ALPHA = 0.07; // position smoothing (lower = smoother but more lag)
 const EMA_MAX_JUMP = 25; // ignore raw matches farther than this (fragmentation artifact)
-const COUNT_HYSTERESIS = 10; // frames a new count must persist before accepted
 let smoothedDots = []; // current EMA-smoothed dot positions
 let pendingCount = -1; // count we're waiting to confirm
 let pendingCountFrames = 0; // how many consecutive frames with pendingCount
@@ -109,7 +135,7 @@ function getSmoothedDots(rawDots) {
       pendingCount = rawCount;
       pendingCountFrames = 1;
     }
-    if (pendingCountFrames >= COUNT_HYSTERESIS) {
+    if (pendingCountFrames >= COUNT_HYSTERESIS_VAL) {
       // Confirmed new count — adopt raw dots as new baseline
       smoothedDots = rawDots.map((d) => ({ x: d.x, y: d.y, size: d.size }));
       pendingCount = -1;
@@ -146,10 +172,10 @@ function getSmoothedDots(rawDots) {
     if (bestDist > EMA_MAX_JUMP) continue;
     next[bestIdx] = {
       x: Math.round(
-        smoothedDots[bestIdx].x * (1 - EMA_ALPHA) + raw.x * EMA_ALPHA,
+        smoothedDots[bestIdx].x * (1 - EMA_ALPHA_VAL) + raw.x * EMA_ALPHA_VAL,
       ),
       y: Math.round(
-        smoothedDots[bestIdx].y * (1 - EMA_ALPHA) + raw.y * EMA_ALPHA,
+        smoothedDots[bestIdx].y * (1 - EMA_ALPHA_VAL) + raw.y * EMA_ALPHA_VAL,
       ),
       size: raw.size,
     };
@@ -165,13 +191,29 @@ let lastDotLogTime = 0;
 const DOT_POSITION_TOLERANCE = 12; // Pixels tolerance for considering dots "same"
 
 // --- Added: require stability before emitting ---
-const DOT_STABLE_MS = 1000; // require detections to be steady for 1 second
 let stableCandidate = null;
 let stableSince = 0;
+
+// Pipeline state — exposed to panel
+let pipelineState = {
+  motionLevel: 0, // average brightness diff (0 = still)
+  motionPaused: false, // true while motion gate blocks detection
+  rawDotCount: 0, // blobs found before smoothing
+  smoothedDotCount: 0, // after EMA + hysteresis
+  emitStatus: "idle", // 'idle' | 'waiting' | 'emitted'
+  emitProgress: 0, // 0-1 progress toward DOT_STABLE_MS_VAL
+};
+let rawDotsForOverlay = []; // raw blobs for debug overlay
+
+// Motion gate cooldown — keep detection paused for a short period after motion
+// stops so the image has time to settle.
+const MOTION_COOLDOWN_MS = 300;
+let motionCooldownUntil = 0;
 
 // Add console view state variables
 let lastDotCount = 0;
 let consoleElems = null;
+let pipelinePanelElems = null;
 
 // Server state tracking
 let serverState = "ready";
@@ -384,7 +426,7 @@ function drawRectangleOverlay() {
 // Wrap lib functions to use module-level constants
 function detectDots(imageData) {
   return _detectDots(imageData, {
-    threshold: DOT_DETECTION_THRESHOLD,
+    threshold: DOT_DETECTION_THRESHOLD_VAL,
     minDotSize: MIN_DOT_SIZE,
     maxDotSize: MAX_DOT_SIZE,
   });
@@ -392,21 +434,33 @@ function detectDots(imageData) {
 
 // Flood fill — included in lib/dotDetection.js (not needed here directly)
 
-// Draw detected dots overlay
-function drawDotsOverlay() {
-  if (!dotDetectionEnabled || detectedDots.length === 0) return;
+// Draw detected dots overlay — shows both raw and smoothed pipeline stages
+function drawDotsOverlay(centerX, centerY) {
+  if (!dotDetectionEnabled) return;
+  if (!centerX) centerX = (cropCanvas.width - TRANSFORM_WIDTH) / 2;
+  if (!centerY) centerY = (cropCanvas.height - TRANSFORM_HEIGHT) / 2;
 
-  // Draw on the crop canvas
   cropCtx.save();
 
-  // Calculate the position of the transformed image
-  const centerX = (cropCanvas.width - TRANSFORM_WIDTH) / 2;
-  const centerY = (cropCanvas.height - TRANSFORM_HEIGHT) / 2;
+  // --- Raw dots (dim, small) – Stage 2 output ---
+  if (rawDotsForOverlay.length > 0) {
+    rawDotsForOverlay.forEach((dot) => {
+      const dotX = centerX + dot.x;
+      const dotY = centerY + dot.y;
 
+      cropCtx.strokeStyle = "rgba(255,255,255,0.35)";
+      cropCtx.lineWidth = 1;
+      cropCtx.beginPath();
+      cropCtx.arc(dotX, dotY, 5, 0, Math.PI * 2);
+      cropCtx.stroke();
+    });
+  }
+
+  // --- Smoothed dots (solid) – Stage 3 output ---
   const dotStroke = cssVar("--color-dot-marker");
   const dotFill = cssVar("--color-dot-marker-fill");
 
-  detectedDots.forEach((dot, index) => {
+  detectedDots.forEach((dot) => {
     cropCtx.strokeStyle = dotStroke;
     cropCtx.fillStyle = dotFill;
     cropCtx.lineWidth = 2;
@@ -430,6 +484,13 @@ function drawDotsOverlay() {
     cropCtx.fillText(`(${dot.x}, ${dot.y})`, dotX + 10, dotY - 10);
   });
 
+  // Motion paused indicator
+  if (pipelineState.motionPaused) {
+    cropCtx.fillStyle = "rgba(255, 150, 0, 0.7)";
+    cropCtx.font = "bold 14px system-ui, sans-serif";
+    cropCtx.fillText("⏸ MOTION — detection paused", centerX + 8, centerY + 20);
+  }
+
   cropCtx.restore();
 }
 
@@ -448,6 +509,8 @@ function logDetectedDots() {
     // reset any candidate state
     stableCandidate = null;
     stableSince = 0;
+    pipelineState.emitStatus = "idle";
+    pipelineState.emitProgress = 0;
     // update UI
     updateDotCount(0);
     return;
@@ -461,13 +524,18 @@ function logDetectedDots() {
   if (candidateChanged) {
     stableCandidate = JSON.parse(JSON.stringify(detectedDots));
     stableSince = currentTime;
+    pipelineState.emitStatus = "idle";
+    pipelineState.emitProgress = 0;
     // update UI immediately with current candidate count
     updateDotCount(stableCandidate.length);
     return; // wait until stable for DOT_STABLE_MS
   }
 
   // Candidate matches current detected dots; check if it has been stable long enough
-  if (currentTime - stableSince < DOT_STABLE_MS) {
+  const elapsed = currentTime - stableSince;
+  if (elapsed < DOT_STABLE_MS_VAL) {
+    pipelineState.emitStatus = "waiting";
+    pipelineState.emitProgress = Math.min(1, elapsed / DOT_STABLE_MS_VAL);
     return; // not stable long enough yet
   }
 
@@ -509,40 +577,19 @@ function logDetectedDots() {
     }
 
     lastDetectedDots = JSON.parse(JSON.stringify(stableCandidate));
-    // update UI with last emitted count
-    updateDotCount(lastDetectedDots.length);
+    pipelineState.emitStatus = "emitted";
+    pipelineState.emitProgress = 1;
   }
 }
 
 // --- Updated: Console UI functions ---
 
-// Create and insert a floating console view into the page
 function createConsoleView() {
-  if (consoleElems) return;
-
-  const panel = document.createElement("div");
-  panel.id = "mini-console";
-  panel.className = "floating-panel";
-  panel.setAttribute("role", "status");
-  panel.setAttribute("aria-live", "polite");
-  panel.innerHTML = `
-    <div class="panel-heading">Console</div>
-    <div class="stat-row"><span>Dots</span><span class="stat-value" id="console-dots">0</span></div>
-  `;
-
-  document.body.appendChild(panel);
-
-  consoleElems = {
-    panel,
-    dots: panel.querySelector("#console-dots"),
-  };
+  // Replaced by pipeline panel — kept as no-op for compatibility
 }
 
-// Update helper functions for the console
 function updateDotCount(count) {
   lastDotCount = count;
-  if (!consoleElems) return;
-  consoleElems.dots.textContent = String(count);
 }
 
 // --- End of console UI functions ---
@@ -672,6 +719,156 @@ function drawCalibrationOverlay(centerX, centerY, payload) {
 
 // --- End server state UI ---
 
+// --- Detection pipeline panel ---
+
+function createDetectionTuningPanel() {
+  const panel = document.createElement("div");
+  panel.id = "detection-tuning-panel";
+  panel.className = "floating-panel";
+
+  function slider(label, id, min, max, step, value) {
+    return `
+      <div class="tuning-row">
+        <label for="${id}">${label}</label>
+        <input type="range" id="${id}" min="${min}" max="${max}" step="${step}" value="${value}">
+        <span class="tuning-value" id="${id}-val">${value}</span>
+      </div>`;
+  }
+
+  panel.innerHTML = `
+    <div class="panel-heading tuning-heading">Detection Pipeline</div>
+
+    <div class="pipeline-stage">
+      <div class="stage-header">
+        <span class="stage-indicator" id="pl-motion-ind"></span>
+        <span class="stage-label">1 · Motion Gate</span>
+        <span class="stage-value" id="pl-motion-val">0.0</span>
+      </div>
+      <div class="stage-bar"><div class="stage-bar-fill" id="pl-motion-bar"></div></div>
+    </div>
+
+    <div class="pipeline-stage">
+      <div class="stage-header">
+        <span class="stage-indicator" id="pl-raw-ind"></span>
+        <span class="stage-label">2 · Raw Detection</span>
+        <span class="stage-value" id="pl-raw-val">0</span>
+      </div>
+      ${slider("Threshold", "t-threshold", 30, 220, 1, DOT_DETECTION_THRESHOLD_VAL)}
+    </div>
+
+    <div class="pipeline-stage">
+      <div class="stage-header">
+        <span class="stage-indicator" id="pl-smooth-ind"></span>
+        <span class="stage-label">3 · Smoothing</span>
+        <span class="stage-value" id="pl-smooth-val">0</span>
+      </div>
+      ${slider("Hysteresis (frames)", "t-hysteresis", 1, 30, 1, COUNT_HYSTERESIS_VAL)}
+      ${slider("EMA α ×100", "t-ema", 1, 40, 1, Math.round(EMA_ALPHA_VAL * 100))}
+    </div>
+
+    <div class="pipeline-stage">
+      <div class="stage-header">
+        <span class="stage-indicator" id="pl-emit-ind"></span>
+        <span class="stage-label">4 · Emit Gate</span>
+        <span class="stage-value" id="pl-emit-val">idle</span>
+      </div>
+      <div class="stage-bar"><div class="stage-bar-fill stage-bar-fill--emit" id="pl-emit-bar"></div></div>
+      ${slider("Stability (ms)", "t-stable", 100, 2000, 50, DOT_STABLE_MS_VAL)}
+    </div>
+
+    <button class="btn btn--reset-tuning" id="t-reset">Reset defaults</button>
+  `;
+  document.body.appendChild(panel);
+
+  // Cache DOM refs for the per-frame update
+  pipelinePanelElems = {
+    motionInd: panel.querySelector("#pl-motion-ind"),
+    motionVal: panel.querySelector("#pl-motion-val"),
+    motionBar: panel.querySelector("#pl-motion-bar"),
+    rawInd: panel.querySelector("#pl-raw-ind"),
+    rawVal: panel.querySelector("#pl-raw-val"),
+    smoothInd: panel.querySelector("#pl-smooth-ind"),
+    smoothVal: panel.querySelector("#pl-smooth-val"),
+    emitInd: panel.querySelector("#pl-emit-ind"),
+    emitVal: panel.querySelector("#pl-emit-val"),
+    emitBar: panel.querySelector("#pl-emit-bar"),
+  };
+
+  // --- Slider bindings ---
+  function bind(id, set) {
+    const input = panel.querySelector(`#${id}`);
+    const display = panel.querySelector(`#${id}-val`);
+    input.addEventListener("input", () => {
+      set(parseFloat(input.value));
+      display.textContent = input.value;
+      saveTuning({
+        DOT_DETECTION_THRESHOLD: DOT_DETECTION_THRESHOLD_VAL,
+        COUNT_HYSTERESIS: COUNT_HYSTERESIS_VAL,
+        DOT_STABLE_MS: DOT_STABLE_MS_VAL,
+        EMA_ALPHA: EMA_ALPHA_VAL,
+      });
+    });
+  }
+
+  bind("t-threshold", (v) => {
+    DOT_DETECTION_THRESHOLD_VAL = v;
+  });
+  bind("t-hysteresis", (v) => {
+    COUNT_HYSTERESIS_VAL = Math.round(v);
+  });
+  bind("t-stable", (v) => {
+    DOT_STABLE_MS_VAL = v;
+  });
+  bind("t-ema", (v) => {
+    EMA_ALPHA_VAL = v / 100;
+  });
+
+  panel.querySelector("#t-reset").addEventListener("click", () => {
+    DOT_DETECTION_THRESHOLD_VAL = 100;
+    COUNT_HYSTERESIS_VAL = 4;
+    DOT_STABLE_MS_VAL = 500;
+    EMA_ALPHA_VAL = 0.07;
+    localStorage.removeItem(TUNING_KEY);
+    panel.querySelector("#t-threshold").value = 100;
+    panel.querySelector("#t-threshold-val").textContent = 100;
+    panel.querySelector("#t-hysteresis").value = 4;
+    panel.querySelector("#t-hysteresis-val").textContent = 4;
+    panel.querySelector("#t-stable").value = 500;
+    panel.querySelector("#t-stable-val").textContent = 500;
+    panel.querySelector("#t-ema").value = 7;
+    panel.querySelector("#t-ema-val").textContent = 7;
+    smoothedDots = [];
+    stableCandidate = null;
+  });
+}
+
+function updatePipelinePanel() {
+  const el = pipelinePanelElems;
+  if (!el) return;
+  const s = pipelineState;
+
+  // Motion gate
+  const motionPct = Math.min(1, s.motionLevel / 20); // 20 = high motion
+  el.motionVal.textContent = s.motionLevel.toFixed(1);
+  el.motionBar.style.width = `${motionPct * 100}%`;
+  el.motionInd.className = `stage-indicator ${s.motionPaused ? "ind--paused" : "ind--active"}`;
+
+  // Raw detection
+  el.rawVal.textContent = s.rawDotCount;
+  el.rawInd.className = `stage-indicator ${s.motionPaused ? "ind--paused" : s.rawDotCount > 0 ? "ind--active" : "ind--idle"}`;
+
+  // Smoothing
+  el.smoothVal.textContent = s.smoothedDotCount;
+  el.smoothInd.className = `stage-indicator ${s.smoothedDotCount > 0 ? "ind--active" : "ind--idle"}`;
+
+  // Emit gate
+  el.emitVal.textContent = s.emitStatus;
+  el.emitBar.style.width = `${s.emitProgress * 100}%`;
+  el.emitInd.className = `stage-indicator ${s.emitStatus === "emitted" ? "ind--emitted" : s.emitStatus === "waiting" ? "ind--waiting" : "ind--idle"}`;
+}
+
+// --- End detection pipeline panel ---
+
 // Check if corners have changed
 function checkCornersChanged() {
   if (!lastCorners) {
@@ -695,14 +892,15 @@ function checkCornersChanged() {
   return false;
 }
 
-// Detect motion in the source video
+// Detect motion in the source video.
+// Returns the average per-pixel brightness change (0 = perfectly still).
 function detectMotion(currentImageData) {
   const currentData = currentImageData.data;
 
   // If we don't have a previous frame or the size changed, initialize
   if (!lastVideoFrame || lastVideoFrame.length !== currentData.length) {
     lastVideoFrame = new Uint8Array(currentData);
-    return true; // First frame or size changed, assume motion
+    return 255; // First frame or size changed, assume max motion
   }
 
   let totalDifference = 0;
@@ -732,13 +930,9 @@ function detectMotion(currentImageData) {
     lastVideoFrame = new Uint8Array(currentData);
   }
 
-  if (sampleCount === 0) return true; // No valid samples, assume motion
+  if (sampleCount === 0) return 255;
 
-  const averageDifference = totalDifference / sampleCount;
-  // Compare average per-pixel brightness change against a fixed unit threshold.
-  // MOTION_THRESHOLD / sampleCount would always be ~0.67, firing on every frame of
-  // normal camera noise. Instead require at least ~5 brightness units average change.
-  return averageDifference > 5;
+  return totalDifference / sampleCount;
 }
 
 // Get video frame data for motion detection (only the selected area)
@@ -872,24 +1066,54 @@ function drawTransformedView() {
   drawCalibrationOverlay(centerX, centerY, calibrationPayload);
 
   if (dotDetectionEnabled) {
-    let dots = getSmoothedDots(detectDots(imageData));
-    // Only apply edge margin during gameplay — calibration dots live near
-    // the edges and must not be filtered out.
-    if (serverState !== "calibrating") {
-      dots = dots.filter(
-        (d) =>
-          d.x >= EDGE_MARGIN_PX &&
-          d.y >= EDGE_MARGIN_PX &&
-          d.x <= TRANSFORM_WIDTH - EDGE_MARGIN_PX &&
-          d.y <= TRANSFORM_HEIGHT - EDGE_MARGIN_PX,
-      );
+    // --- Stage 1: Motion gate ---
+    const motionLevel = detectMotion(imageData);
+    pipelineState.motionLevel = motionLevel;
+    const now = performance.now();
+    if (motionLevel > 5) {
+      motionCooldownUntil = now + MOTION_COOLDOWN_MS;
     }
+    const motionPaused = now < motionCooldownUntil;
+    pipelineState.motionPaused = motionPaused;
+
+    if (motionPaused) {
+      // Motion detected — freeze smoothing state, skip detection
+      pipelineState.rawDotCount = 0;
+      rawDotsForOverlay = [];
+      // Keep showing the last smoothed dots while paused
+      pipelineState.smoothedDotCount = detectedDots.length;
+      pipelineState.emitStatus = "idle";
+      pipelineState.emitProgress = 0;
+      drawDotsOverlay(centerX, centerY);
+      updatePipelinePanel();
+      return;
+    }
+
+    // --- Stage 2: Raw detection ---
+    let rawDots = detectDots(imageData);
+    rawDots = rawDots.filter(
+      (d) =>
+        d.x >= EDGE_MARGIN_PX &&
+        d.y >= EDGE_MARGIN_PX &&
+        d.x <= TRANSFORM_WIDTH - EDGE_MARGIN_PX &&
+        d.y <= TRANSFORM_HEIGHT - EDGE_MARGIN_PX,
+    );
+    pipelineState.rawDotCount = rawDots.length;
+    rawDotsForOverlay = rawDots;
+
+    // --- Stage 3: Smoothing ---
+    const dots = getSmoothedDots(rawDots);
     detectedDots = dots;
-    updateDotCount(detectedDots.length);
-    drawDotsOverlay();
+    pipelineState.smoothedDotCount = dots.length;
+
+    drawDotsOverlay(centerX, centerY);
     logDetectedDots();
+    updatePipelinePanel();
   } else {
-    updateDotCount(0);
+    rawDotsForOverlay = [];
+    pipelineState.rawDotCount = 0;
+    pipelineState.smoothedDotCount = 0;
+    updatePipelinePanel();
   }
 }
 
@@ -1098,6 +1322,7 @@ async function init() {
   // create the console view early
   createConsoleView();
   createServerStateUI();
+  createDetectionTuningPanel();
 
   const hasWebcams = await getAvailableWebcams();
   if (hasWebcams) {

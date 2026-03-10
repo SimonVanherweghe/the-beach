@@ -72,6 +72,8 @@ function recalcCalibration() {
 recalcCalibration();
 
 let calibrationMatchedCount = 0;
+let calibrationPlottingDone = false; // only compute transform after plotter finishes
+let lastWaitingSafeCount = 0; // safe-dot baseline for game start
 
 const CALIBRATION_FILE = "./calibration.json";
 let pixelToMmMatrix = null; // [[a,b,c],[d,e,f]]: x_mm = a*px + b*py + c
@@ -145,6 +147,7 @@ const plotDot = async (x, y) => {
 
 const runCalibration = async () => {
   calibrationMatchedCount = 0;
+  calibrationPlottingDone = false;
   setState(STATE.CALIBRATING);
   console.log("Starting calibration – plotting 4 corner dots…");
   try {
@@ -152,6 +155,7 @@ const runCalibration = async () => {
       calibrationDots.map((d) => ({ x: d.targetX, y: d.targetY })),
     );
     console.log("All calibration dots plotted. Waiting for webcam detection…");
+    calibrationPlottingDone = true;
   } catch (e) {
     console.error("Calibration plotting failed (plotter error):", e.message);
     setState(STATE.WAITING_FOR_SHEET);
@@ -164,11 +168,11 @@ const runCalibration = async () => {
 
 const createNewDot = async ({ dots, maxWidth, maxHeight }) => {
   if (isPlotting) {
-    console.log("Plotter busy – ignoring new dot request");
+    console.log("⏳ Plotter busy – ignoring new dot request");
     return;
   }
   if (!pixelToMmMatrix) {
-    console.warn("Not calibrated – skipping plot");
+    console.warn("⚠ Not calibrated – skipping plot");
     return;
   }
   // Compute margin in pixel space (proportional to the crop canvas)
@@ -176,7 +180,13 @@ const createNewDot = async ({ dots, maxWidth, maxHeight }) => {
   const newDot = getFarthestPoint(dots, maxWidth, maxHeight, {
     margin: marginPx,
   });
-  if (!newDot) return;
+  if (!newDot) {
+    console.warn(
+      `⚠ getFarthestPoint returned null (${dots.length} input dots, ` +
+        `canvas ${maxWidth}×${maxHeight}, margin ${marginPx.toFixed(1)}px) – skipping`,
+    );
+    return;
+  }
 
   const mm = applyAffineTransform(pixelToMmMatrix, newDot.x, newDot.y);
   console.log(
@@ -250,9 +260,14 @@ io.on("connection", async (socket) => {
   // Client confirms sheet has been swapped → start the game
   socket.on("startGame", () => {
     if (currentState === STATE.WAITING_FOR_SHEET) {
-      previousDots = [];
+      // Initialise previousDots length to match the safe dots already on the
+      // sheet so the first human dot (not a pre-existing dot) triggers
+      // the plotter response.
+      previousDots = Array.from({ length: lastWaitingSafeCount }, () => ({}));
       setState(STATE.READY);
-      console.log("Game started on fresh sheet.");
+      console.log(
+        `Game started. Baseline: ${previousDots.length} safe dot(s) already on sheet.`,
+      );
     }
   });
 
@@ -274,13 +289,40 @@ io.on("connection", async (socket) => {
   });
 
   socket.on("detectedDots", async (detection) => {
-    console.log(`Detected dots: ${detection.dots.length}`);
+    const dotCount = detection.dots.length;
 
     if (currentState === STATE.CALIBRATING) {
-      if (detection.dots.length >= calibrationDots.length) {
+      if (!calibrationPlottingDone) {
+        // Plotter is still drawing the corner dots – ignore interim detections
+        // to avoid computing the transform with pre-existing dots.
+        calibrationMatchedCount = detection.dots.length;
+        io.emit("serverState", buildStatePayload());
+        return;
+      }
+
+      // Filter margin dots in pixel space (no mm matrix yet; use proportional margin)
+      const calMarginPxX =
+        MARGIN_MM * (detection.maxWidth / currentPaper.width);
+      const calMarginPxY =
+        MARGIN_MM * (detection.maxHeight / currentPaper.height);
+      const calDots = detection.dots.filter(
+        (d) =>
+          d.x >= calMarginPxX &&
+          d.y >= calMarginPxY &&
+          d.x <= detection.maxWidth - calMarginPxX &&
+          d.y <= detection.maxHeight - calMarginPxY,
+      );
+      const calFiltered = detection.dots.length - calDots.length;
+      if (calFiltered > 0) {
+        console.log(
+          `  Calibration: ${calFiltered} dot(s) outside pixel margin (${calMarginPxX.toFixed(1)}px / ${calMarginPxY.toFixed(1)}px) ignored`,
+        );
+      }
+
+      if (calDots.length >= calibrationDots.length) {
         console.log("Enough dots detected – computing affine transform…");
 
-        const sortedDetected = sortDotsBySpatialOrder(detection.dots);
+        const sortedDetected = sortDotsBySpatialOrder(calDots);
         const pixelPoints = sortedDetected.map((d) => ({ x: d.x, y: d.y }));
         const mmPoints = calibrationDots.map((d) => ({
           x: d.targetX,
@@ -294,10 +336,10 @@ io.on("connection", async (socket) => {
         console.log("Calibration complete. Matrix:", pixelToMmMatrix);
       } else {
         // Update live progress counter
-        calibrationMatchedCount = detection.dots.length;
+        calibrationMatchedCount = calDots.length;
         io.emit("serverState", buildStatePayload());
         console.log(
-          `${detection.dots.length}/${calibrationDots.length} calibration dots visible`,
+          `${calDots.length}/${calibrationDots.length} calibration dots visible`,
         );
       }
       return;
@@ -305,26 +347,88 @@ io.on("connection", async (socket) => {
 
     if (currentState === STATE.READY) {
       // Filter out dots that fall within the safe margin (in mm)
+      let marginFilteredCount = 0;
+      const safeRange = {
+        xMin: MARGIN_MM,
+        yMin: MARGIN_MM,
+        xMax: currentPaper.width - MARGIN_MM,
+        yMax: currentPaper.height - MARGIN_MM,
+      };
       const safeDots = pixelToMmMatrix
         ? detection.dots.filter((d) => {
             const mm = applyAffineTransform(pixelToMmMatrix, d.x, d.y);
-            return (
-              mm.x >= MARGIN_MM &&
-              mm.y >= MARGIN_MM &&
-              mm.x <= currentPaper.width - MARGIN_MM &&
-              mm.y <= currentPaper.height - MARGIN_MM
-            );
+            const inside =
+              mm.x >= safeRange.xMin &&
+              mm.y >= safeRange.yMin &&
+              mm.x <= safeRange.xMax &&
+              mm.y <= safeRange.yMax;
+            if (!inside) {
+              marginFilteredCount++;
+              if (marginFilteredCount <= 3) {
+                console.log(
+                  `  ✗ dot px(${d.x}, ${d.y}) → mm(${mm.x.toFixed(1)}, ${mm.y.toFixed(1)}) ` +
+                    `outside safe [${safeRange.xMin}–${safeRange.xMax}, ${safeRange.yMin}–${safeRange.yMax}]`,
+                );
+              }
+            }
+            return inside;
           })
         : detection.dots;
 
+      if (marginFilteredCount > 3) {
+        console.log(
+          `  … and ${marginFilteredCount - 3} more dots outside margin`,
+        );
+      }
+
+      console.log(
+        `Dots: ${dotCount} detected, ${safeDots.length} safe` +
+          (marginFilteredCount > 0
+            ? ` (${marginFilteredCount} outside margin)`
+            : "") +
+          ` | previous: ${previousDots.length}` +
+          ` | need: ${previousDots.length + 1} to respond`,
+      );
+
       if (safeDots.length > previousDots.length) {
-        console.log("New dot(s) detected – responding…");
+        console.log(
+          `✅ New dot(s) detected (${safeDots.length} > ${previousDots.length}) – responding…`,
+        );
         await createNewDot({
           dots: safeDots,
           maxWidth: detection.maxWidth,
           maxHeight: detection.maxHeight,
         });
       }
+    } else if (currentState === STATE.WAITING_FOR_SHEET) {
+      // Track the safe-dot count so we can use it as a baseline when the
+      // game starts (avoids immediately responding to pre-existing dots).
+      if (pixelToMmMatrix) {
+        const safeRange = {
+          xMin: MARGIN_MM,
+          yMin: MARGIN_MM,
+          xMax: currentPaper.width - MARGIN_MM,
+          yMax: currentPaper.height - MARGIN_MM,
+        };
+        lastWaitingSafeCount = detection.dots.filter((d) => {
+          const mm = applyAffineTransform(pixelToMmMatrix, d.x, d.y);
+          return (
+            mm.x >= safeRange.xMin &&
+            mm.y >= safeRange.yMin &&
+            mm.x <= safeRange.xMax &&
+            mm.y <= safeRange.yMax
+          );
+        }).length;
+      } else {
+        lastWaitingSafeCount = 0;
+      }
+      console.log(
+        `Dots: ${dotCount} detected – ignoring (state: ${currentState}, ${lastWaitingSafeCount} safe)`,
+      );
+    } else if (currentState !== STATE.CALIBRATING) {
+      console.log(
+        `Dots: ${dotCount} detected – ignoring (state: ${currentState})`,
+      );
     }
   });
 });

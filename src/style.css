@@ -148,34 +148,6 @@ canvas {
 	font-size: var(--text-sm);
 }
 
-/* ─── Mini console ─── */
-#mini-console {
-	right: var(--space-md);
-	bottom: var(--space-md);
-	padding: var(--space-sm) var(--space-md);
-	min-width: 100px;
-}
-
-#mini-console .panel-heading {
-	font-weight: 600;
-	margin-bottom: var(--space-xs);
-	color: var(--color-text-muted);
-	font-size: var(--text-xs);
-	text-transform: uppercase;
-	letter-spacing: 0.04em;
-}
-
-#mini-console .stat-row {
-	display: flex;
-	justify-content: space-between;
-	gap: var(--space-lg);
-}
-
-#mini-console .stat-row .stat-value {
-	font-variant-numeric: tabular-nums;
-	font-weight: 600;
-}
-
 /* ─── Server state panel ─── */
 #server-state-panel {
 	top: var(--space-md);
@@ -236,6 +208,148 @@ canvas {
 	background: var(--color-accent-orange);
 	color: #fff;
 	margin-top: var(--space-sm);
+}
+
+/* ─── Detection pipeline panel ─── */
+#detection-tuning-panel {
+	bottom: var(--space-md);
+	left: var(--space-md);
+	padding: var(--space-md) var(--space-lg);
+	min-width: 280px;
+	max-width: 320px;
+}
+
+#detection-tuning-panel .tuning-heading {
+	font-weight: 600;
+	margin-bottom: var(--space-sm);
+	color: var(--color-text-muted);
+	font-size: var(--text-xs);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+
+/* Pipeline stages */
+.pipeline-stage {
+	border-bottom: 1px solid var(--color-border);
+	padding-bottom: var(--space-sm);
+	margin-bottom: var(--space-sm);
+}
+
+.pipeline-stage:last-of-type {
+	border-bottom: none;
+}
+
+.stage-header {
+	display: flex;
+	align-items: center;
+	gap: var(--space-sm);
+	margin-bottom: var(--space-xs);
+}
+
+.stage-indicator {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	flex-shrink: 0;
+	background: var(--color-text-muted);
+	transition: background 0.15s;
+}
+
+.stage-indicator.ind--active {
+	background: var(--color-accent-green);
+}
+
+.stage-indicator.ind--paused {
+	background: var(--color-accent-orange);
+}
+
+.stage-indicator.ind--idle {
+	background: var(--color-text-muted);
+}
+
+.stage-indicator.ind--waiting {
+	background: var(--color-accent-orange);
+}
+
+.stage-indicator.ind--emitted {
+	background: var(--color-accent-green);
+}
+
+.stage-label {
+	font-size: var(--text-xs);
+	font-weight: 500;
+	color: var(--color-text);
+	flex: 1;
+}
+
+.stage-value {
+	font-size: var(--text-xs);
+	font-variant-numeric: tabular-nums;
+	color: var(--color-text);
+	min-width: 32px;
+	text-align: right;
+}
+
+/* Stage bar (motion + emit progress) */
+.stage-bar {
+	height: 4px;
+	background: rgba(255, 255, 255, 0.06);
+	border-radius: 2px;
+	overflow: hidden;
+	margin-bottom: var(--space-xs);
+}
+
+.stage-bar-fill {
+	height: 100%;
+	background: var(--color-accent-orange);
+	border-radius: 2px;
+	width: 0%;
+	transition: width 0.1s ease-out;
+}
+
+.stage-bar-fill--emit {
+	background: var(--color-accent-green);
+}
+
+/* Tuning sliders (inside stages) */
+#detection-tuning-panel .tuning-row {
+	display: grid;
+	grid-template-columns: 1fr auto auto;
+	align-items: center;
+	gap: var(--space-sm);
+	margin-bottom: 2px;
+}
+
+#detection-tuning-panel .tuning-row label {
+	font-size: var(--text-xs);
+	color: var(--color-text-muted);
+	white-space: nowrap;
+}
+
+#detection-tuning-panel .tuning-row input[type="range"] {
+	width: 90px;
+	accent-color: var(--color-accent-orange);
+	cursor: pointer;
+}
+
+#detection-tuning-panel .tuning-value {
+	font-size: var(--text-xs);
+	font-variant-numeric: tabular-nums;
+	color: var(--color-text);
+	min-width: 28px;
+	text-align: right;
+}
+
+.btn--reset-tuning {
+	background: transparent;
+	color: var(--color-text-muted);
+	border: 1px solid var(--color-border);
+	margin-top: var(--space-xs);
+}
+
+.btn--reset-tuning:hover {
+	color: var(--color-text);
+	border-color: var(--color-text-muted);
 }
 
 /* ─── Responsive: narrow viewport ─── */
