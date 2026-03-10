@@ -59,9 +59,16 @@ let videoDisplayRect = { x: 0, y: 0, width: 0, height: 0 };
 const TRANSFORM_WIDTH = 400; // Width of the transformed output
 const TRANSFORM_HEIGHT = 300; // Height of the transformed output
 
-// Safe margin in pixels — dots within this distance of the crop-canvas edge
-// are discarded (paper-edge artifacts). ~1.5 cm of real paper.
-const EDGE_MARGIN_PX = 15;
+// Safe margins in pixels — computed from server-supplied mm values so the
+// wavy border and "The beach" label fall inside the ignored zone.
+// Extra buffer (mm) to cover the wavy border line itself:
+// border_offset (1) + wave_amplitude (1.3) + pen width (~2) ≈ 5 mm.
+const BORDER_BUFFER_MM = 5;
+// Defaults match A3 proportions; updated when serverState arrives.
+let edgeMarginLeft = 20;
+let edgeMarginTop = 20;
+let edgeMarginBottom = 20;
+let edgeMarginRight = 35; // wider: accounts for the text strip
 
 // Dot detection variables
 let detectedDots = [];
@@ -235,6 +242,18 @@ const initSocket = () => {
   socket.on("serverState", (payload) => {
     serverState = payload.state;
     calibrationPayload = payload;
+    // Recompute edge margins from server-supplied paper size & margins
+    if (payload.paperWidth && payload.paperHeight && payload.marginMm != null) {
+      const scaleX = TRANSFORM_WIDTH / payload.paperWidth;
+      const scaleY = TRANSFORM_HEIGHT / payload.paperHeight;
+      const buf = BORDER_BUFFER_MM; // extra buffer for wavy border + pen width
+      edgeMarginLeft = Math.ceil((payload.marginMm + buf) * scaleX);
+      edgeMarginTop = Math.ceil((payload.marginMm + buf) * scaleY);
+      edgeMarginBottom = Math.ceil((payload.marginMm + buf) * scaleY);
+      edgeMarginRight = Math.ceil(
+        ((payload.textMarginMm ?? payload.marginMm) + buf) * scaleX,
+      );
+    }
     updateServerStateUI(payload);
   });
 };
@@ -1107,10 +1126,10 @@ function drawTransformedView() {
     let rawDots = detectDots(imageData);
     rawDots = rawDots.filter(
       (d) =>
-        d.x >= EDGE_MARGIN_PX &&
-        d.y >= EDGE_MARGIN_PX &&
-        d.x <= TRANSFORM_WIDTH - EDGE_MARGIN_PX &&
-        d.y <= TRANSFORM_HEIGHT - EDGE_MARGIN_PX,
+        d.x >= edgeMarginLeft &&
+        d.y >= edgeMarginTop &&
+        d.x <= TRANSFORM_WIDTH - edgeMarginRight &&
+        d.y <= TRANSFORM_HEIGHT - edgeMarginBottom,
     );
     pipelineState.rawDotCount = rawDots.length;
     rawDotsForOverlay = rawDots;

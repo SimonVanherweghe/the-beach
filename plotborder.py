@@ -35,10 +35,9 @@ from HersheyFonts import HersheyFonts
 # Constants
 # ---------------------------------------------------------------------------
 
-CHAR_HEIGHT_MM = 12         # cap-height for Hershey rendering (thick marker)
-CHAR_HEIGHT_SMALL_MM = 8    # smaller cap-height for the completion text
+CHAR_HEIGHT_MM = 11         # cap-height for Hershey rendering (thick marker)
 WAVE_AMPLITUDE = 1.0        # mm – sine perturbation on each border side
-WAVE_PERIOD = 30.0          # mm – wavelength of the sine border
+WAVE_PERIOD = 60.0          # mm – wavelength of the sine border
 STEP_MM = 2.0               # mm – resolution along each border side
 
 # AxiDraw limits (same as plotdot.py)
@@ -53,20 +52,15 @@ _font = HersheyFonts()
 _font.load_default_font("futural")
 _font.normalize_rendering(CHAR_HEIGHT_MM)
 
-_font_small = HersheyFonts()
-_font_small.load_default_font("futural")
-_font_small.normalize_rendering(CHAR_HEIGHT_SMALL_MM)
 
-
-def _text_strokes(text, small=False):
+def _text_strokes(text):
     """Return list of strokes for *text*.  Each stroke is [(x,y), …]."""
-    f = _font_small if small else _font
-    return [list(s) for s in f.strokes_for_text(text)]
+    return [list(s) for s in _font.strokes_for_text(text)]
 
 
-def _text_width(text, small=False):
+def _text_width(text):
     """Width (mm) of rendered text at current cap-height."""
-    strokes = _text_strokes(text, small=small)
+    strokes = _text_strokes(text)
     xs = [pt[0] for s in strokes for pt in s]
     if not xs:
         return 0.0
@@ -98,7 +92,7 @@ def _wavy_side(p_start, p_end, amplitude, seed_offset=0):
         bx = p_start[0] + dx * t
         by = p_start[1] + dy * t
         wave = amplitude * math.sin(2 * math.pi * (t * length) / WAVE_PERIOD + phase)
-        wave += amplitude * 0.3 * math.sin(2 * math.pi * (t * length) / (WAVE_PERIOD * 0.4) + phase * 1.7)
+        wave += amplitude * 0.15 * math.sin(2 * math.pi * (t * length) / (WAVE_PERIOD * 0.5) + phase * 1.7)
         points.append((bx + nx * wave, by + ny * wave))
 
     return points
@@ -133,7 +127,7 @@ def build_border_path(paper_w, paper_h, margin, text_margin):
     return full_path
 
 
-def _rotated_text_strokes(text, landscape_x, landscape_y_start, small=False):
+def _rotated_text_strokes(text, landscape_x, landscape_y_start):
     """Return polylines for *text* rotated for portrait reading.
 
     Physical setup: paper is landscape on the plotter (X right, Y away),
@@ -150,7 +144,7 @@ def _rotated_text_strokes(text, landscape_x, landscape_y_start, small=False):
     *landscape_y_start* is the high-Y starting position (portrait left edge).
     Returns (polylines, y_end) where y_end is the landscape-Y after the text.
     """
-    strokes = _text_strokes(text, small=small)
+    strokes = _text_strokes(text)
     if not strokes:
         return [], landscape_y_start
 
@@ -176,23 +170,23 @@ def build_label_paths(paper_w, paper_h, margin, text_margin):
     strip_center_x = paper_w - text_margin / 2
     landscape_x = strip_center_x + CHAR_HEIGHT_MM / 2
     # Start at high landscape-Y (= portrait left), with padding from border
-    landscape_y_start = paper_h - margin - 2
+    landscape_y_start = paper_h - margin + 3
     return _rotated_text_strokes("The beach", landscape_x, landscape_y_start)
 
 
 def build_completion_paths(timestamp, paper_w, paper_h, margin, text_margin):
     """Return polylines for ' was full on <timestamp>' continuation text."""
     strip_center_x = paper_w - text_margin / 2
-    landscape_x = strip_center_x + CHAR_HEIGHT_SMALL_MM / 2
+    landscape_x = strip_center_x + CHAR_HEIGHT_MM / 2
     y_continuation = _compute_label_end_y(paper_h, margin)
     completion = f" was full on {timestamp}"
-    polylines, _ = _rotated_text_strokes(completion, landscape_x, y_continuation, small=True)
+    polylines, _ = _rotated_text_strokes(completion, landscape_x, y_continuation)
     return polylines
 
 
 def _compute_label_end_y(paper_h, margin):
     """Compute the landscape Y where 'The beach' label ends (without drawing)."""
-    landscape_y_start = paper_h - margin - 2
+    landscape_y_start = paper_h - margin + 3
     label_width = _text_width("The beach")
     return landscape_y_start - label_width
 

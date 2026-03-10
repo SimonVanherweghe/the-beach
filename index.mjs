@@ -59,7 +59,7 @@ const MARGIN_MM = 15;
 const TEXT_MARGIN_MM = 30;
 
 // Maximum number of safe dots before the beach is "full".
-const MAX_DOTS = 150;
+const MAX_DOTS = 15;
 
 // Calibration dots at 10%/90% of paper corners, in mm
 // Order: top-left, top-right, bottom-left, bottom-right
@@ -132,6 +132,10 @@ function buildStatePayload() {
     calibrationMatchedCount,
     paperSizes: Object.keys(paperSizes),
     currentPaperName,
+    paperWidth: currentPaper.width,
+    paperHeight: currentPaper.height,
+    marginMm: MARGIN_MM,
+    textMarginMm: TEXT_MARGIN_MM,
     dotCount: previousDots.length,
     maxDots: MAX_DOTS,
   };
@@ -247,7 +251,7 @@ const createNewDot = async ({ dots, maxWidth, maxHeight }) => {
       now.toLocaleDateString("nl-BE", {
         day: "2-digit",
         month: "2-digit",
-        year: "numeric",
+        year: "2-digit",
       }) +
       " " +
       now.toLocaleTimeString("nl-BE", { hour: "2-digit", minute: "2-digit" });
