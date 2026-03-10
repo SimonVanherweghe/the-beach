@@ -59,6 +59,10 @@ let videoDisplayRect = { x: 0, y: 0, width: 0, height: 0 };
 const TRANSFORM_WIDTH = 400; // Width of the transformed output
 const TRANSFORM_HEIGHT = 300; // Height of the transformed output
 
+// Safe margin in pixels — dots within this distance of the crop-canvas edge
+// are discarded (paper-edge artifacts). ~1.5 cm of real paper.
+const EDGE_MARGIN_PX = 15;
+
 // Dot detection variables
 let detectedDots = [];
 let dotDetectionEnabled = true;
@@ -74,11 +78,90 @@ let lastCorners = null;
 const MOTION_THRESHOLD = 5000; // Threshold for detecting motion
 const FRAME_DIFF_SAMPLE_RATE = 4; // Sample every 4th pixel for performance
 
+// Temporal smoothing: EMA per dot + count hysteresis.
+const EMA_ALPHA = 0.07; // position smoothing (lower = smoother but more lag)
+const EMA_MAX_JUMP = 25; // ignore raw matches farther than this (fragmentation artifact)
+const COUNT_HYSTERESIS = 10; // frames a new count must persist before accepted
+let smoothedDots = []; // current EMA-smoothed dot positions
+let pendingCount = -1; // count we're waiting to confirm
+let pendingCountFrames = 0; // how many consecutive frames with pendingCount
+
+/**
+ * Match raw dots to smoothed dots by nearest-neighbour, apply EMA, and
+ * implement count hysteresis so transient blobs don't disrupt stable detections.
+ * Returns the updated smoothed dots array.
+ */
+function getSmoothedDots(rawDots) {
+  const rawCount = rawDots.length;
+
+  // --- Initial population (no smoothed state yet) ---
+  if (smoothedDots.length === 0) {
+    if (rawCount === 0) return [];
+    smoothedDots = rawDots.map((d) => ({ x: d.x, y: d.y, size: d.size }));
+    return smoothedDots;
+  }
+
+  // --- Count changed: apply hysteresis ---
+  if (rawCount !== smoothedDots.length) {
+    if (rawCount === pendingCount) {
+      pendingCountFrames++;
+    } else {
+      pendingCount = rawCount;
+      pendingCountFrames = 1;
+    }
+    if (pendingCountFrames >= COUNT_HYSTERESIS) {
+      // Confirmed new count — adopt raw dots as new baseline
+      smoothedDots = rawDots.map((d) => ({ x: d.x, y: d.y, size: d.size }));
+      pendingCount = -1;
+      pendingCountFrames = 0;
+    }
+    // Until confirmed, keep current smoothed state frozen
+    return smoothedDots;
+  }
+
+  // Count matches — reset hysteresis and apply EMA with nearest-neighbour matching
+  pendingCount = -1;
+  pendingCountFrames = 0;
+
+  const used = new Array(smoothedDots.length).fill(false);
+  const next = new Array(smoothedDots.length).fill(null);
+
+  for (const raw of rawDots) {
+    let bestIdx = -1,
+      bestDist = Infinity;
+    for (let i = 0; i < smoothedDots.length; i++) {
+      if (used[i]) continue;
+      const d = Math.hypot(
+        raw.x - smoothedDots[i].x,
+        raw.y - smoothedDots[i].y,
+      );
+      if (d < bestDist) {
+        bestDist = d;
+        bestIdx = i;
+      }
+    }
+    if (bestIdx === -1) continue;
+    used[bestIdx] = true;
+    // If the match is too far away, it's likely a fragmentation artifact — keep smoothed position
+    if (bestDist > EMA_MAX_JUMP) continue;
+    next[bestIdx] = {
+      x: Math.round(
+        smoothedDots[bestIdx].x * (1 - EMA_ALPHA) + raw.x * EMA_ALPHA,
+      ),
+      y: Math.round(
+        smoothedDots[bestIdx].y * (1 - EMA_ALPHA) + raw.y * EMA_ALPHA,
+      ),
+      size: raw.size,
+    };
+  }
+
+  smoothedDots = next.map((d, i) => d ?? smoothedDots[i]);
+  return smoothedDots;
+}
+
 // Dot logging debounce variables
 let lastDetectedDots = [];
-let lastDotLogTime = 0;
-const DOT_LOG_DEBOUNCE_MS = 2000; // Only log every 2 seconds
-const DOT_POSITION_TOLERANCE = 3; // Pixels tolerance for considering dots "same"
+const DOT_POSITION_TOLERANCE = 12; // Pixels tolerance for considering dots "same"
 
 // --- Added: require stability before emitting ---
 const DOT_STABLE_MS = 1000; // require detections to be steady for 1 second
@@ -358,14 +441,13 @@ function logDetectedDots() {
     return; // not stable long enough yet
   }
 
-  // Now stable for DOT_STABLE_MS. Only emit if different from last emitted and debounce passed.
+  // Now stable for DOT_STABLE_MS. Only emit if different from what was last sent.
   const changedFromLastEmitted = dotsHaveChanged(
     stableCandidate,
     lastDetectedDots,
   );
-  const timeSinceLastLog = currentTime - lastDotLogTime;
 
-  if (changedFromLastEmitted && timeSinceLastLog >= DOT_LOG_DEBOUNCE_MS) {
+  if (changedFromLastEmitted) {
     if (stableCandidate.length > 0) {
       console.log(
         "Detected dots:",
@@ -397,7 +479,6 @@ function logDetectedDots() {
     }
 
     lastDetectedDots = JSON.parse(JSON.stringify(stableCandidate));
-    lastDotLogTime = currentTime;
     // update UI with last emitted count
     updateDotCount(lastDetectedDots.length);
   }
@@ -642,7 +723,10 @@ function detectMotion(currentImageData) {
   if (sampleCount === 0) return true; // No valid samples, assume motion
 
   const averageDifference = totalDifference / sampleCount;
-  return averageDifference > MOTION_THRESHOLD / sampleCount;
+  // Compare average per-pixel brightness change against a fixed unit threshold.
+  // MOTION_THRESHOLD / sampleCount would always be ~0.67, firing on every frame of
+  // normal camera noise. Instead require at least ~5 brightness units average change.
+  return averageDifference > 5;
 }
 
 // Get video frame data for motion detection (only the selected area)
@@ -690,36 +774,6 @@ function getSelectedAreaImageData() {
 // Transform the video content using perspective correction
 function drawTransformedView() {
   if (!video || video.readyState !== video.HAVE_ENOUGH_DATA) return;
-
-  // Check if corners have changed
-  const cornersHaveChanged = checkCornersChanged();
-
-  // Get current video data for motion detection
-  const currentImageData = getSelectedAreaImageData();
-  const hasMotion = detectMotion(currentImageData);
-
-  // Only recalculate if corners changed or motion detected
-  if (!cornersHaveChanged && !hasMotion && cachedTransformedImage) {
-    // Use cached image
-    const centerX = (cropCanvas.width - TRANSFORM_WIDTH) / 2;
-    const centerY = (cropCanvas.height - TRANSFORM_HEIGHT) / 2;
-
-    cropCtx.clearRect(0, 0, cropCanvas.width, cropCanvas.height);
-    cropCtx.drawImage(cachedTransformedImage, centerX, centerY);
-
-    // Draw calibration overlay on cached frames too
-    drawCalibrationOverlay(centerX, centerY, calibrationPayload);
-
-    // Still draw dots overlay if enabled (but don't recalculate dots)
-    if (dotDetectionEnabled) {
-      drawDotsOverlay();
-      // update UI with existing detected dots count
-      updateDotCount(detectedDots.length);
-    } else {
-      updateDotCount(0);
-    }
-    return;
-  }
 
   // Define destination rectangle (flat view)
   const dst = [
@@ -799,29 +853,28 @@ function drawTransformedView() {
   // Draw the transformed image
   tempCtx.putImageData(imageData, 0, 0);
 
-  // Cache the transformed image
-  if (!cachedTransformedImage) {
-    cachedTransformedImage = document.createElement("canvas");
-  }
-  cachedTransformedImage.width = TRANSFORM_WIDTH;
-  cachedTransformedImage.height = TRANSFORM_HEIGHT;
-  const cacheCtx = cachedTransformedImage.getContext("2d");
-  cacheCtx.drawImage(tempCanvas, 0, 0);
-
   // Draw to main canvas
   cropCtx.drawImage(tempCanvas, centerX, centerY);
 
   // Draw calibration overlay when in calibrating state
   drawCalibrationOverlay(centerX, centerY, calibrationPayload);
 
-  // Detect dots in the transformed image only when image actually changed
   if (dotDetectionEnabled) {
-    detectedDots = detectDots(imageData);
-    // update UI with detected dots count
+    let dots = getSmoothedDots(detectDots(imageData));
+    // Only apply edge margin during gameplay — calibration dots live near
+    // the edges and must not be filtered out.
+    if (serverState !== "calibrating") {
+      dots = dots.filter(
+        (d) =>
+          d.x >= EDGE_MARGIN_PX &&
+          d.y >= EDGE_MARGIN_PX &&
+          d.x <= TRANSFORM_WIDTH - EDGE_MARGIN_PX &&
+          d.y <= TRANSFORM_HEIGHT - EDGE_MARGIN_PX,
+      );
+    }
+    detectedDots = dots;
     updateDotCount(detectedDots.length);
     drawDotsOverlay();
-
-    // Use debounced logging (this will handle sending status updates)
     logDetectedDots();
   } else {
     updateDotCount(0);

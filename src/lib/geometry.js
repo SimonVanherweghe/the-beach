@@ -96,17 +96,24 @@ export function getFarthestPoint(
   points,
   width,
   height,
-  numCandidates = 100,
-  borderSamples = 20,
+  { margin = 0, numCandidates = 100, borderSamples = 20 } = {},
 ) {
-  // Build virtual border dots evenly spaced along all 4 edges
+  // Safe area boundaries (inset by margin)
+  const minX = margin;
+  const minY = margin;
+  const maxX = width - margin;
+  const maxY = height - margin;
+  const safeW = maxX - minX;
+  const safeH = maxY - minY;
+
+  // Build virtual border dots along the safe-area edges
   const borderPoints = [];
   for (let i = 0; i < borderSamples; i++) {
     const t = i / (borderSamples - 1);
-    borderPoints.push({ x: t * width, y: 0 }); // top
-    borderPoints.push({ x: t * width, y: height }); // bottom
-    borderPoints.push({ x: 0, y: t * height }); // left
-    borderPoints.push({ x: width, y: t * height }); // right
+    borderPoints.push({ x: minX + t * safeW, y: minY }); // top
+    borderPoints.push({ x: minX + t * safeW, y: maxY }); // bottom
+    borderPoints.push({ x: minX, y: minY + t * safeH }); // left
+    borderPoints.push({ x: maxX, y: minY + t * safeH }); // right
   }
 
   const allPoints = [...points, ...borderPoints];
@@ -114,7 +121,10 @@ export function getFarthestPoint(
   let farthestPoint = null;
   let maxMinDistance = -1;
   for (let i = 0; i < numCandidates; i++) {
-    const candidate = { x: Math.random() * width, y: Math.random() * height };
+    const candidate = {
+      x: minX + Math.random() * safeW,
+      y: minY + Math.random() * safeH,
+    };
     let minDistance = Infinity;
     for (const existingPoint of allPoints) {
       const distance = distanceBetween(candidate, existingPoint);

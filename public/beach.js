@@ -6,6 +6,8 @@ const intervalTime = 1000;
 let lastPointTime = 0;
 // Number of candidate points to evaluate
 const numCandidates = 100;
+// Safe margin in pixels (proportional to ~1.5 cm on paper)
+const margin = 40;
 
 function setup() {
   createCanvas(800, 800);
@@ -42,12 +44,19 @@ function distanceBetween(p1, p2) {
 function getFarthestPoint() {
   const borderSamples = 20;
   const borderPoints = [];
+  const minX = margin;
+  const minY = margin;
+  const maxX = width - margin;
+  const maxY = height - margin;
+  const safeW = maxX - minX;
+  const safeH = maxY - minY;
+
   for (let i = 0; i < borderSamples; i++) {
     const t = i / (borderSamples - 1);
-    borderPoints.push({ x: t * width, y: 0 }); // top
-    borderPoints.push({ x: t * width, y: height }); // bottom
-    borderPoints.push({ x: 0, y: t * height }); // left
-    borderPoints.push({ x: width, y: t * height }); // right
+    borderPoints.push({ x: minX + t * safeW, y: minY }); // top
+    borderPoints.push({ x: minX + t * safeW, y: maxY }); // bottom
+    borderPoints.push({ x: minX, y: minY + t * safeH }); // left
+    borderPoints.push({ x: maxX, y: minY + t * safeH }); // right
   }
 
   const allPoints = [...points, ...borderPoints];
@@ -57,8 +66,8 @@ function getFarthestPoint() {
 
   for (let i = 0; i < numCandidates; i++) {
     let candidate = {
-      x: random(width),
-      y: random(height),
+      x: minX + random(safeW),
+      y: minY + random(safeH),
       color: "black",
     };
 

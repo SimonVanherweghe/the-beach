@@ -20,6 +20,7 @@ const io = new Server(httpServer);
 const port = process.env.PORT || 3005;
 
 let previousDots = [];
+let isPlotting = false;
 
 const STATE = {
   CALIBRATING: "calibrating",
@@ -46,6 +47,10 @@ const paperSizes = {
 
 let currentPaperName = "A3";
 let currentPaper = paperSizes[currentPaperName];
+
+// Safe margin in mm – dots within this distance from the paper edge are
+// neither plotted nor detected (≈ 1.5 cm).
+const MARGIN_MM = 15;
 
 // Calibration dots at 10%/90% of paper corners, in mm
 // Order: top-left, top-right, bottom-left, bottom-right
@@ -158,22 +163,48 @@ const runCalibration = async () => {
 // ---------------------------------------------------------------------------
 
 const createNewDot = async ({ dots, maxWidth, maxHeight }) => {
+  if (isPlotting) {
+    console.log("Plotter busy – ignoring new dot request");
+    return;
+  }
   if (!pixelToMmMatrix) {
     console.warn("Not calibrated – skipping plot");
     return;
   }
-  const newDot = getFarthestPoint(dots, maxWidth, maxHeight);
+  // Compute margin in pixel space (proportional to the crop canvas)
+  const marginPx = MARGIN_MM * (maxWidth / currentPaper.width);
+  const newDot = getFarthestPoint(dots, maxWidth, maxHeight, {
+    margin: marginPx,
+  });
   if (!newDot) return;
 
   const mm = applyAffineTransform(pixelToMmMatrix, newDot.x, newDot.y);
   console.log(
     `Plotting new dot at (${mm.x.toFixed(1)}, ${mm.y.toFixed(1)}) mm`,
   );
+
+  // Validate coordinates are within the safe area (paper bounds minus margin)
+  if (
+    mm.x < MARGIN_MM ||
+    mm.y < MARGIN_MM ||
+    mm.x > currentPaper.width - MARGIN_MM ||
+    mm.y > currentPaper.height - MARGIN_MM
+  ) {
+    console.error(
+      `Dot (${mm.x.toFixed(1)}, ${mm.y.toFixed(1)}) mm is outside safe area ` +
+        `(margin ${MARGIN_MM} mm inside ${currentPaper.width}×${currentPaper.height} mm) – skipping.`,
+    );
+    return;
+  }
+
+  isPlotting = true;
   try {
     await plotDot(mm.x, mm.y);
   } catch (e) {
     console.error("Plotting failed (plotter error):", e.message);
     return;
+  } finally {
+    isPlotting = false;
   }
 
   // Update previousDots so the next detectedDots event sees this dot
@@ -273,9 +304,26 @@ io.on("connection", async (socket) => {
     }
 
     if (currentState === STATE.READY) {
-      if (detection.dots.length > previousDots.length) {
+      // Filter out dots that fall within the safe margin (in mm)
+      const safeDots = pixelToMmMatrix
+        ? detection.dots.filter((d) => {
+            const mm = applyAffineTransform(pixelToMmMatrix, d.x, d.y);
+            return (
+              mm.x >= MARGIN_MM &&
+              mm.y >= MARGIN_MM &&
+              mm.x <= currentPaper.width - MARGIN_MM &&
+              mm.y <= currentPaper.height - MARGIN_MM
+            );
+          })
+        : detection.dots;
+
+      if (safeDots.length > previousDots.length) {
         console.log("New dot(s) detected – responding…");
-        await createNewDot(detection);
+        await createNewDot({
+          dots: safeDots,
+          maxWidth: detection.maxWidth,
+          maxHeight: detection.maxHeight,
+        });
       }
     }
   });

@@ -23,6 +23,11 @@ def draw_spiral(ad, cx, cy):
         ad.lineto(cx + r * math.cos(theta), cy + r * math.sin(theta))
 
 
+# AxiDraw V3/A3 travel limits in mm
+MAX_TRAVEL_X = 430
+MAX_TRAVEL_Y = 297
+
+
 def draw_dots(dots):
     """Draw one or more dots. Each dot is a dict with 'x' and 'y' in mm."""
     ad = axidraw.AxiDraw()
@@ -36,6 +41,9 @@ def draw_dots(dots):
     try:
         for i, dot in enumerate(dots):
             x, y = dot['x'], dot['y']
+            if x < 0 or y < 0 or x > MAX_TRAVEL_X or y > MAX_TRAVEL_Y:
+                print(f"Skipping dot {i+1}/{len(dots)}: ({x:.1f}, {y:.1f}) mm is out of plotter range", flush=True)
+                continue
             print(f"Drawing dot {i+1}/{len(dots)} at ({x:.1f}, {y:.1f}) mm", flush=True)
             draw_spiral(ad, x, y)
             time.sleep(0.3)
