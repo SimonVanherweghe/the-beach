@@ -1,0 +1,41 @@
+# AxiDraw API — not on PyPI, fetched directly from EvilMadScientist
+axicli @ https://cdn.evilmadscientist.com/dl/ad/public/AxiDraw_API.zip
+
+# Path optimisation for plotborder.py
+vpype==1.15.0
+
+# Hershey vector font rendering for plotborder.py
+Hershey-Fonts==2.1.0
+
+# Numeric / scientific
+numpy==2.4.3
+scipy==1.17.1
+
+# vpype dependencies (pinned for reproducibility)
+asteval==1.0.8
+cachetools==7.0.5
+click==8.3.1
+dill==0.4.1
+lxml==6.0.2
+multiprocess==0.70.19
+packaging==26.0
+pnoise==0.2.0
+pyclipper==1.4.0
+pyphen==0.15.0
+shapely==2.1.2
+svgelements==1.9.6
+svgwrite==1.4.3
+tomli==2.4.0
+tqdm==4.67.3
+
+# AxiDraw / plotink dependencies
+ink_extensions==2.2.0
+plotink==1.14.0
+pyserial==3.5
+
+# HTTP (used by AxiDraw toolchain)
+certifi==2026.2.25
+charset-normalizer==3.4.4
+idna==3.11
+requests==2.32.5
+urllib3==2.6.3
