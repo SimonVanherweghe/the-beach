@@ -8,3 +8,5 @@ npm run build
 
 echo "☕ Starting server with caffeinate (sleep prevention)..."
 caffeinate -dims node index.mjs "$@"
+
+open "http://localhost:3005"
