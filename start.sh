@@ -19,6 +19,16 @@ fi
 echo "🐍 Using $($PYTHON --version)"
 
 # --- Python virtualenv + dependencies ---
+# Recreate venv if it was built with a different Python version
+VENV_PYTHON=".venv/bin/python"
+if [ -d ".venv" ] && [ -x "$VENV_PYTHON" ]; then
+  VENV_VER=$("$VENV_PYTHON" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+  WANT_VER=$("$PYTHON" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+  if [ "$VENV_VER" != "$WANT_VER" ]; then
+    echo "🐍 Venv uses Python $VENV_VER but we need $WANT_VER — recreating..."
+    rm -rf .venv
+  fi
+fi
 if [ ! -d ".venv" ]; then
   echo "🐍 Creating Python virtual environment..."
   "$PYTHON" -m venv .venv
