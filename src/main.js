@@ -56,8 +56,11 @@ const cornerRadius = 10; // radius of corner handles for interaction
 let videoDisplayRect = { x: 0, y: 0, width: 0, height: 0 };
 
 // Perspective transformation variables
-const TRANSFORM_WIDTH = 400; // Width of the transformed output
-const TRANSFORM_HEIGHT = 300; // Height of the transformed output
+// Base resolution for the short edge; long edge derived from paper aspect ratio.
+// A-series paper is √2 : 1 in landscape.  Default = A3 (420×297 mm).
+const TRANSFORM_BASE = 600;
+let TRANSFORM_WIDTH = Math.round(TRANSFORM_BASE * (420 / 297)); // ≈ 849
+let TRANSFORM_HEIGHT = TRANSFORM_BASE;
 
 // Safe margins in pixels — computed from server-supplied mm values so the
 // wavy border and "The beach" label fall inside the ignored zone.
@@ -242,6 +245,13 @@ const initSocket = () => {
   socket.on("serverState", (payload) => {
     serverState = payload.state;
     calibrationPayload = payload;
+    // Update transform dimensions to match paper aspect ratio
+    if (payload.paperWidth && payload.paperHeight) {
+      TRANSFORM_WIDTH = Math.round(
+        TRANSFORM_BASE * (payload.paperWidth / payload.paperHeight),
+      );
+      TRANSFORM_HEIGHT = TRANSFORM_BASE;
+    }
     // Recompute edge margins from server-supplied paper size & margins
     if (payload.paperWidth && payload.paperHeight && payload.marginMm != null) {
       const scaleX = TRANSFORM_WIDTH / payload.paperWidth;
