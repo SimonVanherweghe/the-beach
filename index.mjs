@@ -59,7 +59,7 @@ const MARGIN_MM = 15;
 const TEXT_MARGIN_MM = 30;
 
 // Maximum number of safe dots before the beach is "full".
-const MAX_DOTS = 15;
+const MAX_DOTS = 150;
 
 // Calibration dots at 10%/90% of paper corners, in mm
 // Order: top-left, top-right, bottom-left, bottom-right

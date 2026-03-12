@@ -482,8 +482,8 @@ function drawUnsafeZoneOverlay(centerX, centerY, scale = 1) {
 // Draw detected dots overlay — shows both raw and smoothed pipeline stages
 function drawDotsOverlay(centerX, centerY, scale = 1) {
   if (!dotDetectionEnabled) return;
-  if (!centerX) centerX = (cropCanvas.width - TRANSFORM_WIDTH) / 2;
-  if (!centerY) centerY = (cropCanvas.height - TRANSFORM_HEIGHT) / 2;
+  if (centerX == null) centerX = (cropCanvas.width - TRANSFORM_WIDTH) / 2;
+  if (centerY == null) centerY = (cropCanvas.height - TRANSFORM_HEIGHT) / 2;
 
   cropCtx.save();
 
@@ -713,11 +713,10 @@ function updateServerStateUI(payload) {
   }
 
   el.calibProgress.style.display = state === "calibrating" ? "block" : "none";
-  el.startBtn.style.display = state === "waitingForSheet" ? "block" : "none";
+  el.startBtn.style.display =
+    state === "waitingForSheet" || state === "done" ? "block" : "none";
   el.recalBtn.style.display =
-    state === "calibrating" || state === "drawingBorder" || state === "done"
-      ? "none"
-      : "block";
+    state === "calibrating" || state === "drawingBorder" ? "none" : "block";
 
   if (state === "calibrating") {
     el.label.textContent = "Calibrating…";
