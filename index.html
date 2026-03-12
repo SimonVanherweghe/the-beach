@@ -8,21 +8,32 @@
 </head>
 
 <body>
-	<div class="canvas-container">
-		<div class="canvas-wrapper">
-			<div id="webcam-controls">
-				<label for="webcam-select">Choose webcam:</label>
+	<div class="app-layout">
+		<div class="viewer-column">
+			<div class="tab-bar">
+				<button class="tab-btn tab-btn--active" data-tab="live">Live Feed</button>
+				<button class="tab-btn" data-tab="dots">Detected Dots</button>
+			</div>
+			<div class="tab-content">
+				<div class="tab-panel tab-panel--active" id="tab-live">
+					<canvas id="canvas" role="img" aria-label="Live webcam feed with perspective crop overlay">
+						Live webcam view
+					</canvas>
+				</div>
+				<div class="tab-panel" id="tab-dots">
+					<canvas id="crop-canvas" role="img" aria-label="Perspective-corrected paper view">
+						Perspective-corrected view
+					</canvas>
+				</div>
+			</div>
+		</div>
+		<aside class="sidebar">
+			<div id="webcam-controls" class="sidebar-section">
+				<label class="sidebar-section-label" for="webcam-select">Camera</label>
 				<select id="webcam-select"></select>
 			</div>
-			<canvas id="canvas" role="img" aria-label="Live webcam feed with perspective crop overlay">
-				Live webcam view
-			</canvas>
-		</div>
-		<div class="canvas-wrapper">
-			<canvas id="crop-canvas" role="img" aria-label="Perspective-corrected paper view">
-				Perspective-corrected view
-			</canvas>
-		</div>
+			<!-- #server-state-panel and #detection-tuning-panel appended here by JS -->
+		</aside>
 	</div>
 	<script src="./src/main.js" type="module"></script>
 </body>

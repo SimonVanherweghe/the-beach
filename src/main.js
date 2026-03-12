@@ -260,21 +260,17 @@ const initSocket = () => {
 
 // Set up the canvases size
 function setupCanvas() {
-  // Get the size of the canvas wrapper
-  const wrappers = document.querySelectorAll(".canvas-wrapper");
-  if (wrappers.length < 2) return;
+  const tabContent = document.querySelector(".tab-content");
+  if (!tabContent) return;
 
-  const leftWrapper = wrappers[0];
-  const rightWrapper = wrappers[1];
+  const W = tabContent.clientWidth;
+  const H = tabContent.clientHeight;
 
-  // Set canvas sizes based on their containers
-  canvas.width = leftWrapper.clientWidth;
-  canvas.height = leftWrapper.clientHeight;
-  cropCanvas.width = rightWrapper.clientWidth;
-  cropCanvas.height = rightWrapper.clientHeight;
-
-  // We'll update the rectangle during video rendering
-  // when we know the actual video dimensions
+  // Both canvases share the same dimensions (they swap visibility via tabs)
+  canvas.width = W;
+  canvas.height = H;
+  cropCanvas.width = W;
+  cropCanvas.height = H;
 }
 
 // Compute the video display rectangle (aspect-ratio-preserving fit)
@@ -453,8 +449,38 @@ function detectDots(imageData) {
 
 // Flood fill — included in lib/dotDetection.js (not needed here directly)
 
+/**
+ * Draw a semi-transparent red overlay on the crop canvas to mark the
+ * unsafe margin zone (the area where dots are rejected by the server).
+ * The safe zone is the inner rectangle defined by the edge margin values.
+ */
+function drawUnsafeZoneOverlay(centerX, centerY, scale = 1) {
+  cropCtx.save();
+  cropCtx.fillStyle = "rgba(220, 30, 30, 0.25)";
+
+  const l = centerX;
+  const t = centerY;
+  const W = TRANSFORM_WIDTH * scale;
+  const H = TRANSFORM_HEIGHT * scale;
+  const mL = edgeMarginLeft * scale;
+  const mT = edgeMarginTop * scale;
+  const mR = edgeMarginRight * scale;
+  const mB = edgeMarginBottom * scale;
+
+  // Left strip
+  cropCtx.fillRect(l, t, mL, H);
+  // Right strip
+  cropCtx.fillRect(l + W - mR, t, mR, H);
+  // Top strip (between left and right strips)
+  cropCtx.fillRect(l + mL, t, W - mL - mR, mT);
+  // Bottom strip (between left and right strips)
+  cropCtx.fillRect(l + mL, t + H - mB, W - mL - mR, mB);
+
+  cropCtx.restore();
+}
+
 // Draw detected dots overlay — shows both raw and smoothed pipeline stages
-function drawDotsOverlay(centerX, centerY) {
+function drawDotsOverlay(centerX, centerY, scale = 1) {
   if (!dotDetectionEnabled) return;
   if (!centerX) centerX = (cropCanvas.width - TRANSFORM_WIDTH) / 2;
   if (!centerY) centerY = (cropCanvas.height - TRANSFORM_HEIGHT) / 2;
@@ -464,8 +490,8 @@ function drawDotsOverlay(centerX, centerY) {
   // --- Raw dots (dim, small) – Stage 2 output ---
   if (rawDotsForOverlay.length > 0) {
     rawDotsForOverlay.forEach((dot) => {
-      const dotX = centerX + dot.x;
-      const dotY = centerY + dot.y;
+      const dotX = centerX + dot.x * scale;
+      const dotY = centerY + dot.y * scale;
 
       cropCtx.strokeStyle = "rgba(255,255,255,0.35)";
       cropCtx.lineWidth = 1;
@@ -484,8 +510,8 @@ function drawDotsOverlay(centerX, centerY) {
     cropCtx.fillStyle = dotFill;
     cropCtx.lineWidth = 2;
 
-    const dotX = centerX + dot.x;
-    const dotY = centerY + dot.y;
+    const dotX = centerX + dot.x * scale;
+    const dotY = centerY + dot.y * scale;
 
     // Draw circle around detected dot
     cropCtx.beginPath();
@@ -620,7 +646,7 @@ function createServerStateUI() {
 
   const panel = document.createElement("div");
   panel.id = "server-state-panel";
-  panel.className = "floating-panel";
+  panel.className = "sidebar-panel";
   panel.setAttribute("role", "status");
   panel.setAttribute("aria-live", "polite");
   panel.innerHTML = `
@@ -633,7 +659,7 @@ function createServerStateUI() {
     <button class="btn btn--start" id="start-btn" style="display:none">Start game</button>
     <button class="btn btn--recalibrate" id="recal-btn" style="display:none">Recalibrate</button>
   `;
-  document.body.appendChild(panel);
+  document.querySelector(".sidebar").appendChild(panel);
 
   const startBtn = panel.querySelector("#start-btn");
   const recalBtn = panel.querySelector("#recal-btn");
@@ -712,7 +738,7 @@ function updateServerStateUI(payload) {
  * Draw calibration overlay on the crop canvas.
  * Shows expected dot positions as circles; turns green as dots are seen.
  */
-function drawCalibrationOverlay(centerX, centerY, payload) {
+function drawCalibrationOverlay(centerX, centerY, payload, scale = 1) {
   if (!payload || !payload.calibrationTargets) return;
   const { state, calibrationTargets, calibrationMatchedCount } = payload;
   if (state !== "calibrating") return;
@@ -723,8 +749,8 @@ function drawCalibrationOverlay(centerX, centerY, payload) {
 
   cropCtx.save();
   calibrationTargets.forEach((target, i) => {
-    const px = centerX + target.nx * TRANSFORM_WIDTH;
-    const py = centerY + target.ny * TRANSFORM_HEIGHT;
+    const px = centerX + target.nx * TRANSFORM_WIDTH * scale;
+    const py = centerY + target.ny * TRANSFORM_HEIGHT * scale;
     const matched = i < calibrationMatchedCount;
 
     cropCtx.beginPath();
@@ -757,7 +783,7 @@ function drawCalibrationOverlay(centerX, centerY, payload) {
 function createDetectionTuningPanel() {
   const panel = document.createElement("div");
   panel.id = "detection-tuning-panel";
-  panel.className = "floating-panel";
+  panel.className = "sidebar-panel";
 
   function slider(label, id, min, max, step, value) {
     return `
@@ -811,7 +837,7 @@ function createDetectionTuningPanel() {
 
     <button class="btn btn--reset-tuning" id="t-reset">Reset defaults</button>
   `;
-  document.body.appendChild(panel);
+  document.querySelector(".sidebar").appendChild(panel);
 
   // Cache DOM refs for the per-frame update
   pipelinePanelElems = {
@@ -1028,9 +1054,20 @@ function drawTransformedView() {
   // Clear the crop canvas
   cropCtx.clearRect(0, 0, cropCanvas.width, cropCanvas.height);
 
-  // Calculate center position for the transformed image
-  const centerX = (cropCanvas.width - TRANSFORM_WIDTH) / 2;
-  const centerY = (cropCanvas.height - TRANSFORM_HEIGHT) / 2;
+  // Compute aspect-ratio-preserving display rect (fills the canvas)
+  const canvasAR = cropCanvas.width / cropCanvas.height;
+  const transformAR = TRANSFORM_WIDTH / TRANSFORM_HEIGHT;
+  let displayW, displayH;
+  if (canvasAR > transformAR) {
+    displayH = cropCanvas.height;
+    displayW = displayH * transformAR;
+  } else {
+    displayW = cropCanvas.width;
+    displayH = displayW / transformAR;
+  }
+  const centerX = (cropCanvas.width - displayW) / 2;
+  const centerY = (cropCanvas.height - displayH) / 2;
+  const displayScale = displayW / TRANSFORM_WIDTH;
 
   // Create temporary canvas for the transformation
   const tempCanvas = document.createElement("canvas");
@@ -1092,11 +1129,14 @@ function drawTransformedView() {
   // Draw the transformed image
   tempCtx.putImageData(imageData, 0, 0);
 
-  // Draw to main canvas
-  cropCtx.drawImage(tempCanvas, centerX, centerY);
+  // Draw to main canvas scaled to fill
+  cropCtx.drawImage(tempCanvas, centerX, centerY, displayW, displayH);
+
+  // Draw unsafe zone overlay (semi-transparent red margins)
+  drawUnsafeZoneOverlay(centerX, centerY, displayScale);
 
   // Draw calibration overlay when in calibrating state
-  drawCalibrationOverlay(centerX, centerY, calibrationPayload);
+  drawCalibrationOverlay(centerX, centerY, calibrationPayload, displayScale);
 
   if (dotDetectionEnabled) {
     // --- Stage 1: Motion gate ---
@@ -1117,7 +1157,7 @@ function drawTransformedView() {
       pipelineState.smoothedDotCount = detectedDots.length;
       pipelineState.emitStatus = "idle";
       pipelineState.emitProgress = 0;
-      drawDotsOverlay(centerX, centerY);
+      drawDotsOverlay(centerX, centerY, displayScale);
       updatePipelinePanel();
       return;
     }
@@ -1139,7 +1179,7 @@ function drawTransformedView() {
     detectedDots = dots;
     pipelineState.smoothedDotCount = dots.length;
 
-    drawDotsOverlay(centerX, centerY);
+    drawDotsOverlay(centerX, centerY, displayScale);
     logDetectedDots();
     updatePipelinePanel();
   } else {
@@ -1348,9 +1388,26 @@ function constrainPointToVideo(point) {
   };
 }
 
+// Set up tab switching between live feed and dots view
+function setupTabs() {
+  const tabBtns = document.querySelectorAll(".tab-btn");
+  const tabPanels = document.querySelectorAll(".tab-panel");
+
+  tabBtns.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const targetTab = btn.dataset.tab;
+      tabBtns.forEach((b) => b.classList.toggle("tab-btn--active", b === btn));
+      tabPanels.forEach((p) =>
+        p.classList.toggle("tab-panel--active", p.id === `tab-${targetTab}`),
+      );
+    });
+  });
+}
+
 // Initialize everything
 async function init() {
   setupCanvas();
+  setupTabs();
 
   // create the console view early
   createConsoleView();
