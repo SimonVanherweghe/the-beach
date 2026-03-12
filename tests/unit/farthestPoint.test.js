@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { getFarthestPoint, distanceBetween } from "../../src/lib/geometry.js";
 
 describe("distanceBetween", () => {
@@ -22,25 +22,6 @@ describe("distanceBetween", () => {
 });
 
 describe("getFarthestPoint", () => {
-  let randomMock;
-
-  beforeEach(() => {
-    // Seed Math.random with a deterministic sequence
-    let callIndex = 0;
-    const sequence = [];
-    // Pre-fill 200 values (100 candidates × 2 coords)
-    for (let i = 0; i < 200; i++) {
-      sequence.push(((i * 7 + 3) % 200) / 200); // pseudo-deterministic spread
-    }
-    randomMock = vi
-      .spyOn(Math, "random")
-      .mockImplementation(() => sequence[callIndex++ % sequence.length]);
-  });
-
-  afterEach(() => {
-    randomMock.mockRestore();
-  });
-
   it("returns a point within bounds when no existing points", () => {
     const result = getFarthestPoint([], 400, 300);
     expect(result.x).toBeGreaterThanOrEqual(0);
@@ -94,13 +75,37 @@ describe("getFarthestPoint", () => {
   });
 
   it("avoids placing points near the canvas border", () => {
-    // With no real dots the algorithm should still pick an interior point
-    // because the virtual border ghosts penalise edge candidates.
+    // With no real dots the algorithm should pick the center — the point
+    // farthest from all border ghosts.
     const result = getFarthestPoint([], 400, 300);
     const margin = 20;
     expect(result.x).toBeGreaterThan(margin);
     expect(result.x).toBeLessThan(400 - margin);
     expect(result.y).toBeGreaterThan(margin);
     expect(result.y).toBeLessThan(300 - margin);
+  });
+
+  it("is deterministic — same inputs produce same output", () => {
+    const existing = [
+      { x: 100, y: 75 },
+      { x: 300, y: 225 },
+    ];
+    const a = getFarthestPoint(existing, 400, 300);
+    const b = getFarthestPoint(existing, 400, 300);
+    expect(a.x).toBeCloseTo(b.x);
+    expect(a.y).toBeCloseTo(b.y);
+  });
+
+  it("places dot in the large gap, not near the border", () => {
+    // All dots on the left side — the large gap is on the right interior
+    const leftCluster = [
+      { x: 30, y: 50 },
+      { x: 30, y: 150 },
+      { x: 30, y: 250 },
+    ];
+    const result = getFarthestPoint(leftCluster, 400, 300);
+
+    // Result should be clearly in the right half (the large gap)
+    expect(result.x).toBeGreaterThan(150);
   });
 });

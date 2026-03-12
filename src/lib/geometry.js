@@ -3,6 +3,8 @@
  * Used by both server (index.mjs) and tests.
  */
 
+import { Delaunay } from "d3-delaunay";
+
 // ---------------------------------------------------------------------------
 // Linear algebra
 // ---------------------------------------------------------------------------
@@ -84,19 +86,39 @@ export function distanceBetween(p1, p2) {
 }
 
 /**
- * Find the point farthest from all existing points.
- * Samples `numCandidates` random candidates and picks the one whose minimum
- * distance to any existing point is the largest.
+ * Circumcenter + circumradius of triangle (ax,ay)–(bx,by)–(cx,cy).
+ * Returns { x, y, radius } or null if the triangle is degenerate.
+ */
+function circumcenterOf(ax, ay, bx, by, cx, cy) {
+  const D = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+  if (Math.abs(D) < 1e-10) return null;
+  const ux =
+    ((ax * ax + ay * ay) * (by - cy) +
+      (bx * bx + by * by) * (cy - ay) +
+      (cx * cx + cy * cy) * (ay - by)) /
+    D;
+  const uy =
+    ((ax * ax + ay * ay) * (cx - bx) +
+      (bx * bx + by * by) * (ax - cx) +
+      (cx * cx + cy * cy) * (bx - ax)) /
+    D;
+  return { x: ux, y: uy, radius: Math.hypot(ux - ax, uy - ay) };
+}
+
+/**
+ * Find the point farthest from all existing points using Delaunay
+ * triangulation. Computes the circumcenter of every Delaunay triangle and
+ * returns the one with the largest circumradius that lies inside the safe
+ * area — this is the center of the largest empty circle.
  *
- * `borderSamples` virtual dots are placed evenly along each edge so that
- * candidates near the border score no better than those near a real dot —
- * this naturally discourages placing new dots at the edges.
+ * Virtual border dots along each edge ensure circumcenters near borders
+ * have small radii and naturally lose to interior candidates.
  */
 export function getFarthestPoint(
   points,
   width,
   height,
-  { margin = 0, numCandidates = 100, borderSamples = 20, bounds = null } = {},
+  { margin = 0, numCandidates = 100, borderSamples = 40, bounds = null } = {},
 ) {
   // Safe area boundaries (inset by margin, or explicit bounds)
   const minX = bounds?.minX ?? margin;
@@ -105,6 +127,9 @@ export function getFarthestPoint(
   const maxY = bounds?.maxY ?? height - margin;
   const safeW = maxX - minX;
   const safeH = maxY - minY;
+
+  const fallback = { x: minX + safeW / 2, y: minY + safeH / 2 };
+  if (safeW <= 0 || safeH <= 0) return fallback;
 
   // Build virtual border dots along the safe-area edges
   const borderPoints = [];
@@ -118,24 +143,39 @@ export function getFarthestPoint(
 
   const allPoints = [...points, ...borderPoints];
 
-  let farthestPoint = null;
-  let maxMinDistance = -1;
-  for (let i = 0; i < numCandidates; i++) {
-    const candidate = {
-      x: minX + Math.random() * safeW,
-      y: minY + Math.random() * safeH,
-    };
-    let minDistance = Infinity;
-    for (const existingPoint of allPoints) {
-      const distance = distanceBetween(candidate, existingPoint);
-      if (distance < minDistance) minDistance = distance;
-    }
-    if (minDistance > maxMinDistance) {
-      maxMinDistance = minDistance;
-      farthestPoint = candidate;
+  // Need at least 3 non-collinear points for triangulation
+  if (allPoints.length < 3) return fallback;
+
+  // Delaunay triangulation
+  const coords = allPoints.flatMap((p) => [p.x, p.y]);
+  const delaunay = new Delaunay(coords);
+  const { triangles } = delaunay;
+
+  let bestPoint = null;
+  let bestRadius = -1;
+
+  for (let i = 0; i < triangles.length; i += 3) {
+    const a = triangles[i];
+    const b = triangles[i + 1];
+    const c = triangles[i + 2];
+    const cc = circumcenterOf(
+      coords[a * 2],
+      coords[a * 2 + 1],
+      coords[b * 2],
+      coords[b * 2 + 1],
+      coords[c * 2],
+      coords[c * 2 + 1],
+    );
+    if (!cc) continue;
+    // Must lie inside the safe area
+    if (cc.x < minX || cc.x > maxX || cc.y < minY || cc.y > maxY) continue;
+    if (cc.radius > bestRadius) {
+      bestRadius = cc.radius;
+      bestPoint = { x: cc.x, y: cc.y };
     }
   }
-  return farthestPoint;
+
+  return bestPoint ?? fallback;
 }
 
 /**
